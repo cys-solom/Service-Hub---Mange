@@ -550,7 +550,7 @@ export default function Sales() {
                                                 let isOut = false;
                                                 let availCount = null;
                                                 if (p.inventoryProduct && p.fulfillmentType === 'from_stock') {
-                                                    const availItems = getLocalAccounts().filter(a => 
+                                                    const availItems = (ctxAccounts || []).filter(a => 
                                                         a.productName === p.inventoryProduct && 
                                                         a.status !== 'damaged' && a.status !== 'completed' &&
                                                         (Number(a.allowed_uses) === -1 || Number(a.current_uses) < Number(a.allowed_uses))
