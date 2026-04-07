@@ -24,6 +24,10 @@ export default function Sales() {
     const [assignedAccountDetails, setAssignedAccountDetails] = useState(null);
     const [copiedId, setCopiedId] = useState(null);
 
+    // Delete confirmation modal for inventory-linked sales
+    const [deleteModal, setDeleteModal] = useState(null); // { saleId, email, accountId }
+    const [deleteLoading, setDeleteLoading] = useState(false);
+
     // Customer management state
     const [customerType, setCustomerType] = useState('new'); // 'new' | 'existing'
     const [selectedCustomerId, setSelectedCustomerId] = useState('');
@@ -304,28 +308,14 @@ export default function Sales() {
         const sale = sales.find(s => s.id === id);
         if (!sale) return;
 
-        // لو الأوردر مربوط بحساب من المخزون
+        // لو الأوردر مربوط بحساب من المخزون — افتح المودال
         if (sale.fromInventory && sale.assignedAccountId) {
-            const choice = prompt(
-                `هذا الأوردر مربوط بحساب من المخزون:\n${sale.assignedAccountEmail}\n\nهل تريد إرجاع الحساب للمخزون؟\n\nاكتب:\n1 = إرجاع كـ "متاح" (available)\n2 = إرجاع كـ "مستخدم" (used)\n3 = حذف الأوردر فقط بدون إرجاع\n\nأو اضغط إلغاء للتراجع`
-            );
-            if (!choice) return; // ألغى
-
-            try {
-                if (choice === '1' || choice === '2') {
-                    const newStatus = choice === '1' ? 'available' : 'used';
-                    const account = (ctxAccounts || []).find(a => a.id === sale.assignedAccountId);
-                    if (account) {
-                        const newUses = Math.max(0, Number(account.current_uses) - 1);
-                        await accountsAPI.update(account.id, { status: newStatus, current_uses: newUses });
-                    }
-                }
-                await salesAPI.delete(id);
-                await refreshData();
-            } catch (error) {
-                console.error(error);
-                alert('حدث خطأ: ' + (error?.message || ''));
-            }
+            setDeleteModal({
+                saleId: id,
+                email: sale.assignedAccountEmail,
+                accountId: sale.assignedAccountId,
+                productName: sale.productName,
+            });
         } else {
             if (!confirm('حذف هذا البيع؟')) return;
             try {
@@ -335,6 +325,27 @@ export default function Sales() {
                 console.error(error);
             }
         }
+    };
+
+    const confirmDeleteWithInventory = async (returnStatus) => {
+        if (!deleteModal) return;
+        setDeleteLoading(true);
+        try {
+            if (returnStatus) {
+                const account = (ctxAccounts || []).find(a => a.id === deleteModal.accountId);
+                if (account) {
+                    const newUses = Math.max(0, Number(account.current_uses) - 1);
+                    await accountsAPI.update(account.id, { status: returnStatus, current_uses: newUses });
+                }
+            }
+            await salesAPI.delete(deleteModal.saleId);
+            setDeleteModal(null);
+            await refreshData();
+        } catch (error) {
+            console.error(error);
+            alert('حدث خطأ: ' + (error?.message || ''));
+        }
+        setDeleteLoading(false);
     };
 
     const togglePaid = async (id) => {
@@ -796,6 +807,88 @@ export default function Sales() {
                             <button onClick={() => setAssignedAccountDetails(null)} className="mt-4 w-full bg-slate-800 text-white py-3.5 rounded-xl font-bold hover:bg-slate-900 shadow-lg shadow-slate-200 transition-all">
                                 حسناً، إغلاق نافذة الحساب
                             </button>
+                        </div>
+                    </div>
+                </div>
+            , document.body)}
+
+            {/* ============ DELETE INVENTORY MODAL ============ */}
+            {deleteModal && createPortal(
+                <div className="animate-fade-in" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(4px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+                    <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
+                        <div className="p-6 bg-gradient-to-r from-red-600 to-rose-600 text-white">
+                            <h3 className="text-lg font-bold flex items-center gap-2">
+                                <i className="fa-solid fa-triangle-exclamation text-2xl"></i> حذف أوردر مربوط بالمخزون
+                            </h3>
+                        </div>
+                        <div className="p-8 space-y-5">
+                            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
+                                <p className="text-sm font-bold text-slate-600">هذا الأوردر مربوط بحساب من المخزون:</p>
+                                <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-purple-200">
+                                    <div className="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center">
+                                        <i className="fa-solid fa-server text-purple-600"></i>
+                                    </div>
+                                    <div>
+                                        <p className="font-mono font-bold text-sm text-slate-800 dir-ltr text-right">{deleteModal.email}</p>
+                                        <p className="text-xs text-slate-400 font-bold">{deleteModal.productName}</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div>
+                                <p className="text-sm font-extrabold text-slate-800 mb-3">اختر حالة الحساب بعد حذف الأوردر:</p>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button disabled={deleteLoading} onClick={() => confirmDeleteWithInventory('available')}
+                                        className="flex flex-col items-center gap-2 p-4 rounded-2xl border-2 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-400 transition-all group disabled:opacity-50">
+                                        <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center text-white group-hover:scale-110 transition-transform">
+                                            <i className="fa-solid fa-check-circle"></i>
+                                        </div>
+                                        <span className="text-sm font-bold text-emerald-700">متاح</span>
+                                        <span className="text-[10px] text-emerald-500 font-medium">Available</span>
+                                    </button>
+                                    <button disabled={deleteLoading} onClick={() => confirmDeleteWithInventory('used')}
+                                        className="flex flex-col items-center gap-2 p-4 rounded-2xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-400 transition-all group disabled:opacity-50">
+                                        <div className="w-10 h-10 bg-blue-500 rounded-xl flex items-center justify-center text-white group-hover:scale-110 transition-transform">
+                                            <i className="fa-solid fa-user-check"></i>
+                                        </div>
+                                        <span className="text-sm font-bold text-blue-700">مستخدم</span>
+                                        <span className="text-[10px] text-blue-500 font-medium">Used</span>
+                                    </button>
+                                    <button disabled={deleteLoading} onClick={() => confirmDeleteWithInventory('damaged')}
+                                        className="flex flex-col items-center gap-2 p-4 rounded-2xl border-2 border-orange-200 bg-orange-50 hover:bg-orange-100 hover:border-orange-400 transition-all group disabled:opacity-50">
+                                        <div className="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center text-white group-hover:scale-110 transition-transform">
+                                            <i className="fa-solid fa-ban"></i>
+                                        </div>
+                                        <span className="text-sm font-bold text-orange-700">تالف</span>
+                                        <span className="text-[10px] text-orange-500 font-medium">Damaged</span>
+                                    </button>
+                                    <button disabled={deleteLoading} onClick={() => confirmDeleteWithInventory('completed')}
+                                        className="flex flex-col items-center gap-2 p-4 rounded-2xl border-2 border-slate-200 bg-slate-50 hover:bg-slate-100 hover:border-slate-400 transition-all group disabled:opacity-50">
+                                        <div className="w-10 h-10 bg-slate-500 rounded-xl flex items-center justify-center text-white group-hover:scale-110 transition-transform">
+                                            <i className="fa-solid fa-flag-checkered"></i>
+                                        </div>
+                                        <span className="text-sm font-bold text-slate-700">منتهي</span>
+                                        <span className="text-[10px] text-slate-500 font-medium">Completed</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-3 pt-4 border-t border-slate-200">
+                                <button disabled={deleteLoading} onClick={() => setDeleteModal(null)}
+                                    className="flex-1 py-3 rounded-xl font-bold text-slate-600 bg-white border-2 border-slate-200 hover:bg-slate-50 transition disabled:opacity-50">
+                                    إلغاء
+                                </button>
+                                <button disabled={deleteLoading} onClick={() => confirmDeleteWithInventory(null)}
+                                    className="flex-1 py-3 rounded-xl font-bold text-red-600 bg-red-50 border-2 border-red-200 hover:bg-red-100 transition flex items-center justify-center gap-2 disabled:opacity-50">
+                                    <i className="fa-solid fa-trash"></i> حذف بدون إرجاع
+                                </button>
+                            </div>
+
+                            {deleteLoading && (
+                                <div className="text-center text-sm font-bold text-indigo-600">
+                                    <i className="fa-solid fa-spinner fa-spin ml-2"></i> جاري التنفيذ...
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
