@@ -1,0 +1,109 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Cairo', sans-serif;
+  background-color: #f1f5f9;
+  direction: rtl;
+}
+
+/* في index.css */
+.form-input {
+  @apply border border-slate-300 p-2.5 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition shadow-sm;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+
+
+.label-style {
+  display: block;
+  font-size: 0.875rem;
+  /* text-sm */
+  font-weight: 800;
+  /* font-extrabold */
+  color: #1e293b;
+  /* text-slate-800 */
+  margin-bottom: 0.75rem;
+  /* mb-3 (مسافة واضحة تحت العنوان) */
+  margin-right: 0.25rem;
+}
+
+.input-style {
+  width: 100%;
+  background-color: #ffffff;
+  border: 2px solid #e2e8f0;
+  /* border-slate-200 (حدود واضحة) */
+  color: #0f172a;
+  /* text-slate-900 (نص غامق وواضح) */
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-radius: 0.75rem;
+  /* rounded-xl */
+  padding: 0.875rem 1rem;
+  /* p-3.5 (حقول مريحة) */
+  outline: none;
+  transition: all 0.2s;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+
+.input-style:focus {
+  border-color: #4f46e5;
+  /* indigo-600 */
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
+  /* ring-4 */
+}
+
+.input-style::placeholder {
+  color: #94a3b8;
+  /* slate-400 */
+  font-weight: 400;
+}
+
+/* تحسين شكل السكرول بار */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Global animation for portals */
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Portal modals inherit RTL */
+[style*="position: fixed"] {
+  direction: rtl;
+  font-family: 'Cairo', sans-serif;
+}

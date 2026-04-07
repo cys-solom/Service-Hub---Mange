@@ -1,0 +1,777 @@
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { useAuth } from '../context/AuthContext';
+import { useData } from '../context/DataContext';
+import { salesAPI, accountsAPI, walletsAPI, customersAPI } from '../services/api';
+import * as XLSX from 'xlsx';
+
+export default function Sales() {
+    const { user, hasPermission } = useAuth();
+    const { products, sales: ctxSales, wallets: ctxWallets, customers: ctxCustomers, accounts: ctxAccounts, refreshData } = useData();
+    const isAdmin = user?.role === 'admin' || hasPermission('all');
+
+    // ========= States =========
+    const [sales, setSales] = useState([]);
+    const [wallets, setWallets] = useState([]);
+    const [customers, setCustomers] = useState([]);
+
+    const [showProductModal, setShowProductModal] = useState(false);
+    const [showSaleModal, setShowSaleModal] = useState(false);
+    const [editingProduct, setEditingProduct] = useState(null);
+    const [editingSale, setEditingSale] = useState(null);
+    
+    // Account assignment details modal
+    const [assignedAccountDetails, setAssignedAccountDetails] = useState(null);
+    const [copiedId, setCopiedId] = useState(null);
+
+    // Customer management state
+    const [customerType, setCustomerType] = useState('new'); // 'new' | 'existing'
+    const [selectedCustomerId, setSelectedCustomerId] = useState('');
+    const [contactChannel, setContactChannel] = useState('واتساب');
+    const [customerSearch, setCustomerSearch] = useState('');
+    const formRef = useRef(null);
+
+    const [searchTerm, setSearchTerm] = useState('');
+    const [productFilters, setProductFilters] = useState([]); // array of selected product names
+    const [statusFilter, setStatusFilter] = useState('all');
+    const [visibleCount, setVisibleCount] = useState(15);
+
+    // ========= Sync from context =========
+    useEffect(() => {
+        setSales(ctxSales);
+        setWallets(ctxWallets);
+        setCustomers(ctxCustomers);
+    }, [ctxSales, ctxWallets, ctxCustomers]);
+
+    // Reset customer form when modal opens
+    useEffect(() => {
+        if (showSaleModal) {
+            if (editingSale) {
+                // When editing, find matching customer
+                const existingCustomer = customers.find(c => c.id === editingSale.customerId);
+                if (existingCustomer) {
+                    setCustomerType('existing');
+                    setSelectedCustomerId(existingCustomer.id);
+                } else {
+                    setCustomerType('new');
+                    setSelectedCustomerId('');
+                }
+                setContactChannel(editingSale.contactChannel || 'واتساب');
+            } else {
+                setCustomerType('new');
+                setSelectedCustomerId('');
+                setContactChannel('واتساب');
+            }
+            setCustomerSearch('');
+        }
+    }, [showSaleModal, editingSale]);
+
+    // Auto-fill form when selecting existing customer
+    const handleSelectCustomer = (custId) => {
+        setSelectedCustomerId(custId);
+        const customer = customers.find(c => String(c.id) === String(custId));
+        if (customer && formRef.current) {
+            const nameInput = formRef.current.querySelector('[name="customerName"]');
+            const phoneInput = formRef.current.querySelector('[name="customerPhone"]');
+            const emailInput = formRef.current.querySelector('[name="customerEmail"]');
+            if (nameInput) nameInput.value = customer.name || '';
+            if (phoneInput) phoneInput.value = customer.phone || '';
+            if (emailInput) emailInput.value = customer.email || '';
+            setContactChannel(customer.contactChannel || 'واتساب');
+        }
+    };
+
+    // Get filtered customers for search
+    const filteredCustomers = useMemo(() => {
+        if (!customerSearch) return customers;
+        const term = customerSearch.toLowerCase();
+        return customers.filter(c =>
+            (c.name && c.name.toLowerCase().includes(term)) ||
+            (c.phone && c.phone.includes(term)) ||
+            (c.email && c.email.toLowerCase().includes(term))
+        );
+    }, [customers, customerSearch]);
+
+    // ========= Wallet Deposit Helper =========
+    const depositToWallet = async (walletId, amount, description) => {
+        if (!walletId) return;
+        await walletsAPI.deposit(walletId, amount, description, 'مبيعات', 'System');
+    };
+
+    // ========= Filtered Sales =========
+    const copyToClipboard = (text, id) => {
+        navigator.clipboard.writeText(text);
+        setCopiedId(id);
+        setTimeout(() => setCopiedId(null), 1500);
+    };
+
+    const toggleProductFilter = (name) => {
+        setProductFilters(prev => 
+            prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]
+        );
+    };
+
+    const filteredSales = useMemo(() => {
+        return sales.filter(s => {
+            const matchProduct = productFilters.length === 0 || productFilters.includes(s.productName);
+            const matchStatus = statusFilter === 'all'
+                ? true
+                : statusFilter === 'paid' ? s.isPaid
+                : statusFilter === 'unpaid' ? !s.isPaid
+                : statusFilter === 'hasDiscount' ? s.discount > 0
+                : true;
+            const term = searchTerm.toLowerCase();
+            const matchSearch = !term ||
+                (s.customerEmail && s.customerEmail.toLowerCase().includes(term)) ||
+                (s.customerName && s.customerName.toLowerCase().includes(term)) ||
+                (s.customerPhone && s.customerPhone.includes(term)) ||
+                (s.productName && s.productName.toLowerCase().includes(term)) ||
+                (s.notes && s.notes.toLowerCase().includes(term));
+            return matchProduct && matchStatus && matchSearch;
+        }).sort((a, b) => new Date(b.date) - new Date(a.date));
+    }, [sales, productFilters, statusFilter, searchTerm]);
+
+    const stats = useMemo(() => {
+        const totalRevenue = filteredSales.reduce((sum, s) => sum + (Number(s.finalPrice) || 0), 0);
+        const totalCollected = filteredSales.filter(s => s.isPaid).reduce((sum, s) => sum + (Number(s.finalPrice) || 0), 0);
+        const totalRemaining = filteredSales.filter(s => !s.isPaid).reduce((sum, s) => sum + (Number(s.remainingAmount) || Number(s.finalPrice) || 0), 0);
+        
+        // Daily revenue
+        const todayStr = new Date().toDateString();
+        const todaySales = filteredSales.filter(s => new Date(s.date).toDateString() === todayStr);
+        const dailyRevenue = todaySales.reduce((sum, s) => sum + (Number(s.finalPrice) || 0), 0);
+        const dailyCount = todaySales.length;
+
+        return { totalRevenue, totalCollected, totalRemaining, count: filteredSales.length, dailyRevenue, dailyCount };
+    }, [filteredSales]);
+
+
+
+    // ========= Sale CRUD =========
+    const handleSaveSale = async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const productName = formData.get('productName');
+        const product = products.find(p => p.name === productName);
+        const originalPrice = product ? product.price : 0;
+        const discount = Number(formData.get('discount') || 0);
+        const finalPrice = Math.max(0, originalPrice - discount);
+        const isPaid = formData.get('isPaid') === 'on';
+        const walletId = formData.get('walletId') || '';
+
+        // اسم المحفظة
+        const wallet = walletId ? wallets.find(w => String(w.id) === String(walletId)) : null;
+
+        // مدة الاشتراك من المنتج
+        const productDuration = product ? (product.duration || 30) : 30;
+        const saleDate = editingSale ? (editingSale.date || new Date().toISOString()) : new Date().toISOString();
+        const expiryDate = new Date(new Date(saleDate).getTime() + productDuration * 86400000).toISOString();
+
+        // Customer handling
+        const customerName = formData.get('customerName') || '';
+        const customerPhone = formData.get('customerPhone') || '';
+        const customerEmail = formData.get('customerEmail') || '';
+        const selectedChannel = contactChannel;
+
+        // Save/update customer record
+        let customerId = selectedCustomerId;
+        
+        try {
+            if (customerType === 'new' && customerName) {
+                customerId = await customersAPI.upsert({
+                    name: customerName,
+                    phone: customerPhone,
+                    email: customerEmail,
+                    contactChannel: selectedChannel,
+                });
+            } else if (customerType === 'existing' && customerId) {
+                await customersAPI.updateLastOrder(customerId, customerEmail);
+            }
+
+            const data = {
+                productName,
+                originalPrice,
+                discount,
+                finalPrice,
+                duration: productDuration,
+                expiryDate,
+                customerId: customerId || '',
+                customerName,
+                customerPhone,
+                customerEmail,
+                contactChannel: selectedChannel,
+                isPaid,
+                remainingAmount: isPaid ? 0 : Number(formData.get('remainingAmount') || finalPrice),
+                paymentMethod: wallet ? wallet.name : (formData.get('paymentMethod') || ''),
+                walletId: walletId,
+                walletName: wallet ? wallet.name : '',
+                notes: formData.get('notes') || '',
+                moderator: user?.username || 'Admin',
+                fromInventory: false,
+                assignedAccountEmail: '',
+                assignedAccountId: null,
+            };
+
+            if (editingSale) {
+                await salesAPI.update(editingSale.id, data);
+            } else {
+                // سحب من المخزون لو المنتج مربوط بالمخزون ونوعه from_stock
+                if (product && product.inventoryProduct && product.fulfillmentType === 'from_stock') {
+                    const allAccounts = ctxAccounts || [];
+                    const availableAccount = allAccounts.find(acc => 
+                        acc.productName === product.inventoryProduct && 
+                        acc.status !== 'damaged' && acc.status !== 'completed' &&
+                        (Number(acc.allowed_uses) === -1 || Number(acc.current_uses) < Number(acc.allowed_uses))
+                    );
+                    if (availableAccount) {
+                        data.assignedAccountEmail = availableAccount.email;
+                        data.assignedAccountId = availableAccount.id;
+                        data.fromInventory = true;
+                        // تحديث المخزون
+                        const newUses = Number(availableAccount.current_uses) + 1;
+                        const newStatus = (Number(availableAccount.allowed_uses) !== -1 && newUses >= Number(availableAccount.allowed_uses)) ? 'completed' : 'used';
+                        await accountsAPI.update(availableAccount.id, { current_uses: newUses, status: newStatus });
+
+                        setAssignedAccountDetails({
+                            email: availableAccount.email,
+                            password: availableAccount.password,
+                            twoFA: availableAccount.twoFA,
+                            productName: availableAccount.productName,
+                            isNew: true
+                        });
+                    } else {
+                        data.assignedAccountEmail = '⚠️ لا يوجد حساب متاح';
+                        data.fromInventory = true;
+                    }
+                }
+
+                await salesAPI.create(data);
+
+                // إيداع المبلغ المدفوع في المحفظة
+                if (walletId && isPaid) {
+                    await depositToWallet(walletId, finalPrice, `بيع ${productName} — ${data.customerEmail}`);
+                } else if (walletId && !isPaid && finalPrice > (Number(data.remainingAmount) || 0)) {
+                    const paidAmount = finalPrice - (Number(data.remainingAmount) || 0);
+                    if (paidAmount > 0) await depositToWallet(walletId, paidAmount, `بيع جزئي ${productName} — ${data.customerEmail}`);
+                }
+            }
+
+            setShowSaleModal(false);
+            setEditingSale(null);
+            await refreshData();
+        } catch (error) {
+            console.error('Error saving sale:', error);
+            alert('حدث خطأ أثناء الحفظ');
+        }
+    };
+
+    const showAccountDetails = (sale) => {
+        if (sale.fromInventory && sale.assignedAccountId) {
+            const account = (ctxAccounts || []).find(a => a.id === sale.assignedAccountId);
+            if (account) {
+                setAssignedAccountDetails({
+                    email: account.email,
+                    password: account.password,
+                    twoFA: account.twoFA,
+                    productName: account.productName || sale.productName,
+                    isNew: false
+                });
+            } else {
+                setAssignedAccountDetails({
+                    email: sale.assignedAccountEmail || 'تم حذف الحساب',
+                    password: '',
+                    twoFA: '',
+                    productName: sale.productName,
+                    isNew: false
+                });
+            }
+        } else {
+            setAssignedAccountDetails({
+                email: sale.customerEmail || sale.customerName || 'لا يوجد إيميل',
+                password: '',
+                twoFA: '',
+                productName: sale.productName,
+                isNew: false
+            });
+        }
+    };
+
+    const deleteSale = async (id) => {
+        if (!confirm('حذف هذا البيع؟')) return;
+        try {
+            await salesAPI.delete(id);
+            await refreshData();
+        } catch (error) {
+            console.error(error);
+        }
+    };
+
+    const togglePaid = async (id) => {
+        const sale = sales.find(s => s.id === id);
+        if (!sale) return;
+        try {
+            await salesAPI.togglePaid(id, !sale.isPaid, sale.finalPrice);
+            await refreshData();
+        } catch (error) {
+            console.error(error);
+        }
+    };
+
+    // ========= Export =========
+    const exportExcel = () => {
+        const ws = XLSX.utils.json_to_sheet(filteredSales.map(s => ({
+            "المنتج": s.productName, "اسم العميل": s.customerName, "الهاتف": s.customerPhone, "الإيميل": s.customerEmail,
+            "السعر": s.originalPrice, "الخصم": s.discount, "الإجمالي": s.finalPrice,
+            "حالة الدفع": s.isPaid ? 'مدفوع' : 'غير مدفوع', "المتبقي": s.remainingAmount,
+            "وسيلة التواصل": s.contactChannel, "التاريخ": new Date(s.date).toLocaleDateString('ar-EG'),
+            "المودريتور": s.moderator
+        })));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Sales");
+        XLSX.writeFile(wb, `ServiceHub_Sales_${new Date().toISOString().split('T')[0]}.xlsx`);
+    };
+
+    const openAddSale = () => { setEditingSale(null); setShowSaleModal(true); };
+    const openEditSale = (sale) => { setEditingSale(sale); setShowSaleModal(true); };
+
+    // ========= Render =========
+    return (
+        <div className="space-y-6 animate-fade-in pb-24 font-sans text-slate-800">
+
+            {/* Stats Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div className="bg-gradient-to-br from-indigo-600 to-blue-700 rounded-2xl p-5 text-white shadow-lg">
+                    <p className="text-indigo-200 text-sm font-bold mb-1">إجمالي المبيعات</p>
+                    <h3 className="text-3xl font-extrabold">{stats.count}</h3>
+                </div>
+                <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-2xl p-5 text-white shadow-lg">
+                    <p className="text-amber-100 text-sm font-bold mb-1">إيرادات اليوم</p>
+                    <h3 className="text-2xl font-extrabold dir-ltr">{stats.dailyRevenue.toLocaleString()} <span className="text-sm opacity-80">ج.م</span></h3>
+                    <p className="text-amber-100 text-[10px] font-bold mt-1">{stats.dailyCount} أوردر اليوم</p>
+                </div>
+                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
+                    <p className="text-slate-500 text-sm font-bold mb-1">إجمالي الإيرادات</p>
+                    <h3 className="text-2xl font-extrabold text-slate-900 dir-ltr">{stats.totalRevenue.toLocaleString()} <span className="text-sm text-slate-400">ج.م</span></h3>
+                </div>
+                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
+                    <p className="text-slate-500 text-sm font-bold mb-1">المحصّل</p>
+                    <h3 className="text-2xl font-extrabold text-emerald-600 dir-ltr">{stats.totalCollected.toLocaleString()} <span className="text-sm text-emerald-300">ج.م</span></h3>
+                </div>
+                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
+                    <p className="text-slate-500 text-sm font-bold mb-1">المديونيات</p>
+                    <h3 className="text-2xl font-extrabold text-red-600 dir-ltr">{stats.totalRemaining.toLocaleString()} <span className="text-sm text-red-300">ج.م</span></h3>
+                </div>
+            </div>
+
+            {/* ============ SALES LIST ============ */}
+                <div className="space-y-5">
+                    {/* Toolbar */}
+                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row gap-4 items-center justify-between sticky top-2 z-30 bg-white/95 backdrop-blur-md">
+                        <div className="relative w-full md:w-80">
+                            <i className="fa-solid fa-search absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                            <input type="text" className="w-full bg-white border-2 border-slate-200 text-slate-900 text-sm font-semibold rounded-xl pr-10 p-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all placeholder-slate-400" placeholder="بحث بالاسم أو الرقم أو المنتج..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                        </div>
+                        <div className="flex gap-3 w-full md:w-auto">
+                            <button onClick={exportExcel} className="bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 font-bold rounded-xl text-sm px-4 py-3 transition-all" title="تصدير Excel"><i className="fa-solid fa-file-excel"></i></button>
+                            <button onClick={openAddSale} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm px-8 py-3 shadow-lg shadow-indigo-200 transition-all flex items-center gap-2">
+                                <i className="fa-solid fa-plus"></i> بيع جديد
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Filters */}
+                    <div className="flex flex-wrap gap-3 items-center">
+                        <div className="flex bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm">
+                            {[{ id: 'all', label: 'الكل' }, { id: 'paid', label: 'مدفوع' }, { id: 'unpaid', label: 'غير مدفوع' }, { id: 'hasDiscount', label: 'خصومات' }].map(f => (
+                                <button key={f.id} onClick={() => setStatusFilter(f.id)} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === f.id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>{f.label}</button>
+                            ))}
+                        </div>
+                        {/* Product filter dropdown */}
+                        <div className="relative">
+                            <select
+                                value={productFilters.length === 1 ? productFilters[0] : ''}
+                                onChange={e => {
+                                    const val = e.target.value;
+                                    if (val === '') setProductFilters([]);
+                                    else setProductFilters([val]);
+                                }}
+                                className={`appearance-none bg-white border-2 rounded-xl py-2 pr-4 pl-9 text-sm font-bold cursor-pointer outline-none transition-all ${productFilters.length > 0 ? 'border-indigo-400 text-indigo-700 bg-indigo-50' : 'border-slate-200 text-slate-600 hover:border-indigo-200'}`}
+                            >
+                                <option value="">كل المنتجات</option>
+                                {products.map(p => (
+                                    <option key={p.id} value={p.name}>{p.name}</option>
+                                ))}
+                            </select>
+                            <i className={`fa-solid fa-boxes-stacked absolute left-3 top-1/2 -translate-y-1/2 text-xs ${productFilters.length > 0 ? 'text-indigo-500' : 'text-slate-400'}`}></i>
+                        </div>
+                        {productFilters.length > 0 && (
+                            <button onClick={() => setProductFilters([])} className="px-3 py-2 rounded-xl text-xs font-bold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition flex items-center gap-1">
+                                <i className="fa-solid fa-xmark"></i> مسح الفلتر
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Sales List */}
+                    <div className="space-y-4">
+                        {filteredSales.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-20 bg-white rounded-3xl border-2 border-dashed border-slate-200 text-slate-400">
+                                <i className="fa-regular fa-folder-open text-5xl mb-4 opacity-30"></i>
+                                <p className="font-bold text-lg">لا توجد مبيعات</p>
+                            </div>
+                        ) : (
+                            filteredSales.slice(0, visibleCount).map(sale => (
+                                <div key={sale.id} className="group bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-lg hover:border-indigo-200 transition-all duration-300 overflow-hidden relative">
+                                    <div className={`absolute top-0 bottom-0 right-0 w-1.5 ${sale.isPaid ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
+                                    <div className="p-5 flex flex-col md:flex-row gap-5 items-start md:items-center">
+
+                                        {/* Info */}
+                                        <div className="flex-1 pr-3">
+                                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                                                <h3 className="text-lg font-black text-slate-800">{sale.customerName || sale.customerEmail || 'عميل'}</h3>
+                                                {sale.customerPhone && <span className="text-xs text-slate-400 font-mono dir-ltr">{sale.customerPhone}</span>}
+                                                <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-bold ${sale.isPaid ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                                                    {sale.isPaid ? '✅ مدفوع' : '⏳ غير مدفوع'}
+                                                </span>
+                                                {sale.discount > 0 && (
+                                                    <span className="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-orange-50 text-orange-700 border border-orange-200">
+                                                        خصم {sale.discount} ج.م
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="flex flex-wrap gap-2 text-sm text-slate-500 font-medium">
+                                                <span className="flex items-center gap-1.5 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
+                                                    <i className="fa-solid fa-tag text-indigo-500"></i> {sale.productName}
+                                                </span>
+                                                <span className="flex items-center gap-1.5 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
+                                                    <i className={`fa-brands ${sale.contactChannel === 'واتساب' ? 'fa-whatsapp text-green-600' : sale.contactChannel === 'ماسنجر' ? 'fa-facebook-messenger text-blue-600' : 'fa-telegram text-sky-500'}`}></i>
+                                                    {sale.contactChannel}
+                                                </span>
+                                                {sale.paymentMethod && (
+                                                    <span className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg border border-emerald-100 text-xs font-bold">
+                                                        <i className="fa-solid fa-wallet"></i> {sale.paymentMethod}
+                                                    </span>
+                                                )}
+                                                {sale.fromInventory && sale.assignedAccountEmail && (
+                                                    <button onClick={() => showAccountDetails(sale)} className="flex items-center gap-1.5 bg-purple-50 text-purple-700 px-3 py-1.5 rounded-lg border border-purple-200 text-xs font-bold hover:bg-purple-100 transition shadow-sm cursor-pointer" title="عرض تفاصيل الحساب المربوط">
+                                                        <i className="fa-solid fa-server"></i> {sale.assignedAccountEmail}
+                                                    </button>
+                                                )}
+                                                {sale.duration && (
+                                                    <span className="flex items-center gap-1.5 bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg border border-blue-100 text-xs font-bold">
+                                                        <i className="fa-solid fa-calendar-days"></i> {sale.duration} يوم
+                                                    </span>
+                                                )}
+                                                {sale.expiryDate && (() => {
+                                                    const daysLeft = Math.ceil((new Date(sale.expiryDate) - new Date()) / 86400000);
+                                                    const isExpired = daysLeft <= 0;
+                                                    const isSoon = daysLeft > 0 && daysLeft <= 5;
+                                                    return (
+                                                        <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border ${isExpired ? 'bg-red-50 text-red-700 border-red-200' : isSoon ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-teal-50 text-teal-700 border-teal-100'}`}>
+                                                            <i className={`fa-solid ${isExpired ? 'fa-circle-exclamation' : isSoon ? 'fa-clock' : 'fa-check-circle'}`}></i>
+                                                            {isExpired ? `منتهي منذ ${Math.abs(daysLeft)} يوم` : `ينتهي بعد ${daysLeft} يوم`}
+                                                        </span>
+                                                    );
+                                                })()}
+                                            </div>
+                                            {sale.notes && <p className="text-xs text-slate-400 mt-2 italic">📝 {sale.notes}</p>}
+                                        </div>
+
+                                        {/* Price */}
+                                        <div className="flex flex-col items-end min-w-[130px] text-left">
+                                            <div className="text-2xl font-black text-slate-800 dir-ltr">
+                                                {Number(sale.finalPrice).toLocaleString()} <span className="text-sm text-slate-400">ج.م</span>
+                                            </div>
+                                            {sale.discount > 0 && (
+                                                <div className="text-xs text-slate-400 line-through dir-ltr">{Number(sale.originalPrice).toLocaleString()} ج.م</div>
+                                            )}
+                                            {!sale.isPaid && sale.remainingAmount > 0 && (
+                                                <div className="text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded mt-1 border border-red-100">متبقي: {sale.remainingAmount} ج.م</div>
+                                            )}
+                                            <div className="text-[10px] font-black text-indigo-700 bg-indigo-50 px-3 py-2 rounded-xl mt-3 dir-ltr text-center border border-indigo-100 flex items-center justify-center gap-1.5 shadow-sm w-full">
+                                                <i className="fa-solid fa-calendar-alt opacity-70"></i>
+                                                {new Date(sale.date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' })}
+                                                <span className="opacity-40 mx-0.5">•</span>
+                                                <i className="fa-regular fa-clock opacity-70"></i>
+                                                {new Date(sale.date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                                            </div>
+                                            <div className="text-[11px] text-indigo-600 font-bold mt-0.5"><i className="fa-solid fa-user-check ml-1"></i>{sale.moderator}</div>
+                                        </div>
+
+                                        {/* Actions */}
+                                        <div className="flex md:flex-col gap-2">
+                                            <button onClick={() => togglePaid(sale.id)} className={`w-9 h-9 flex items-center justify-center rounded-xl transition border ${sale.isPaid ? 'text-emerald-600 bg-emerald-50 border-emerald-100 hover:bg-emerald-100' : 'text-orange-600 bg-orange-50 border-orange-100 hover:bg-orange-100'}`} title={sale.isPaid ? 'تحويل لغير مدفوع' : 'تحويل لمدفوع'}>
+                                                <i className={`fa-solid ${sale.isPaid ? 'fa-check-double' : 'fa-clock'}`}></i>
+                                            </button>
+                                            <button onClick={() => openEditSale(sale)} className="w-9 h-9 flex items-center justify-center text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition border border-blue-100" title="تعديل"><i className="fa-solid fa-pen"></i></button>
+                                            <button onClick={() => deleteSale(sale.id)} className="w-9 h-9 flex items-center justify-center text-red-600 bg-red-50 hover:bg-red-100 rounded-xl transition border border-red-100" title="حذف"><i className="fa-solid fa-trash"></i></button>
+                                        </div>
+
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+
+                    {visibleCount < filteredSales.length && (
+                        <div className="flex justify-center mt-6">
+                            <button onClick={() => setVisibleCount(p => p + 15)} className="bg-white border-2 border-indigo-100 text-indigo-600 px-10 py-3 rounded-full font-bold hover:bg-indigo-50 transition-all flex items-center gap-2 shadow-sm">
+                                عرض المزيد <i className="fa-solid fa-chevron-down"></i>
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+
+
+            {/* ============ SALE MODAL ============ */}
+            {showSaleModal && createPortal(
+                <div className="animate-fade-in" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(4px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+                    <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl flex flex-col overflow-hidden" style={{ maxHeight: '90vh' }}>
+                        <div className="p-6 bg-gradient-to-r from-indigo-700 to-blue-600 text-white flex justify-between items-center shadow-md">
+                            <h3 className="text-xl font-bold flex items-center gap-2">
+                                <i className={`fa-solid ${editingSale ? 'fa-pen-to-square' : 'fa-plus-circle'}`}></i>
+                                {editingSale ? 'تعديل البيع' : 'بيع جديد'}
+                            </h3>
+                            <button onClick={() => { setShowSaleModal(false); setEditingSale(null); }} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition"><i className="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+                        <div className="p-8 overflow-y-auto space-y-6">
+                            <form id="saleForm" ref={formRef} onSubmit={handleSaveSale} className="space-y-6" key={editingSale?.id || 'new'}>
+                                {/* اختيار المنتج */}
+                                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                                    <div className="text-xs font-black text-indigo-600 uppercase tracking-widest mb-2"><i className="fa-solid fa-tag ml-1"></i> المنتج</div>
+                                    {products.length === 0 ? (
+                                        <div className="bg-yellow-50 text-yellow-800 p-4 rounded-xl border border-yellow-200 font-bold text-sm flex items-center gap-2">
+                                            <i className="fa-solid fa-triangle-exclamation"></i> لا يوجد منتجات. اطلب من الأدمن إضافة المنتجات أولاً.
+                                        </div>
+                                    ) : (
+                                        <select name="productName" defaultValue={editingSale?.productName || ""} className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all appearance-none" required>
+                                            <option value="" disabled>-- اختر المنتج --</option>
+                                            {products.map(p => {
+                                                let isOut = false;
+                                                let availCount = null;
+                                                if (p.inventoryProduct && p.fulfillmentType === 'from_stock') {
+                                                    const availItems = getLocalAccounts().filter(a => 
+                                                        a.productName === p.inventoryProduct && 
+                                                        a.status !== 'damaged' && a.status !== 'completed' &&
+                                                        (Number(a.allowed_uses) === -1 || Number(a.current_uses) < Number(a.allowed_uses))
+                                                    );
+                                                    availCount = availItems.length;
+                                                    isOut = availCount === 0;
+                                                }
+                                                return <option key={p.id} value={p.name} disabled={isOut}>
+                                                    {p.name} — {p.price} ج.م {availCount !== null ? `(${availCount} متاح)` : ''} {isOut ? '— نفد من المخزون' : ''}
+                                                </option>;
+                                            })}
+                                        </select>
+                                    )}
+                                </div>
+
+                                {/* بيانات العميل */}
+                                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                                    <div className="text-xs font-black text-indigo-600 uppercase tracking-widest mb-2"><i className="fa-solid fa-user ml-1"></i> بيانات العميل</div>
+                                    
+                                    {/* Toggle: عميل جديد / عميل سابق */}
+                                    <div className="flex gap-2 bg-slate-100 p-1.5 rounded-xl">
+                                        <button type="button" onClick={() => { setCustomerType('new'); setSelectedCustomerId(''); }} className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${customerType === 'new' ? 'bg-white text-indigo-700 shadow-md' : 'text-slate-500 hover:bg-white/50'}`}>
+                                            <i className="fa-solid fa-user-plus"></i> عميل جديد
+                                        </button>
+                                        <button type="button" onClick={() => setCustomerType('existing')} className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${customerType === 'existing' ? 'bg-white text-indigo-700 shadow-md' : 'text-slate-500 hover:bg-white/50'}`}>
+                                            <i className="fa-solid fa-users"></i> عميل سابق
+                                            {customers.length > 0 && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-full font-black">{customers.length}</span>}
+                                        </button>
+                                    </div>
+
+                                    {/* عميل سابق - اختيار من القائمة */}
+                                    {customerType === 'existing' && (
+                                        <div className="space-y-3">
+                                            <div className="relative">
+                                                <i className="fa-solid fa-search absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                                                <input type="text" value={customerSearch} onChange={e => setCustomerSearch(e.target.value)} className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl pr-10 p-3 font-bold text-sm focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" placeholder="ابحث عن العميل بالاسم أو الرقم..." />
+                                            </div>
+                                            {filteredCustomers.length === 0 ? (
+                                                <div className="text-center py-6 text-slate-400 text-sm font-bold bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                                                    <i className="fa-solid fa-user-slash text-2xl mb-2 block opacity-30"></i>
+                                                    لا يوجد عملاء {customerSearch ? 'يطابقوا البحث' : 'مسجلين بعد'}
+                                                </div>
+                                            ) : (
+                                                <div className="max-h-48 overflow-y-auto space-y-1.5 custom-scrollbar">
+                                                    {filteredCustomers.map(c => (
+                                                        <button key={c.id} type="button" onClick={() => handleSelectCustomer(c.id)}
+                                                            className={`w-full flex items-center gap-3 p-3 rounded-xl text-right transition-all border-2 ${selectedCustomerId === c.id ? 'border-indigo-500 bg-indigo-50 shadow-sm' : 'border-transparent hover:bg-slate-50 hover:border-slate-200'}`}>
+                                                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${selectedCustomerId === c.id ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                                                                {c.name?.charAt(0).toUpperCase() || '?'}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <p className="font-bold text-slate-800 text-sm truncate">{c.name}</p>
+                                                                <div className="flex items-center gap-2 text-xs text-slate-400">
+                                                                    {c.phone && <span className="font-mono dir-ltr">{c.phone}</span>}
+                                                                    <span className="flex items-center gap-1">
+                                                                        <i className={`fa-brands text-[10px] ${c.contactChannel === 'واتساب' ? 'fa-whatsapp text-green-500' : c.contactChannel === 'ماسنجر' ? 'fa-facebook-messenger text-blue-500' : 'fa-telegram text-sky-500'}`}></i>
+                                                                        {c.contactChannel}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                            {selectedCustomerId === c.id && <i className="fa-solid fa-check-circle text-indigo-600"></i>}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* مكان التواصل */}
+                                    <div>
+                                        <label className="block text-sm font-extrabold text-slate-800 mb-2">مكان التواصل</label>
+                                        <div className="grid grid-cols-3 gap-3">
+                                            {['واتساب', 'ماسنجر', 'تليجرام'].map(ch => (
+                                                <button key={ch} type="button" onClick={() => setContactChannel(ch)}
+                                                    className={`flex items-center justify-center gap-2 p-3 rounded-xl border-2 transition-all ${contactChannel === ch ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-indigo-200'}`}>
+                                                    <i className={`fa-brands ${ch === 'واتساب' ? 'fa-whatsapp text-green-600' : ch === 'ماسنجر' ? 'fa-facebook-messenger text-blue-600' : 'fa-telegram text-sky-500'} text-lg`}></i>
+                                                    <span className="text-sm font-bold text-slate-700">{ch}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* حقول بيانات العميل */}
+                                    <div>
+                                        <label className="block text-sm font-extrabold text-slate-800 mb-2">اسم العميل <span className="text-red-400">*</span></label>
+                                        <input name="customerName" defaultValue={editingSale?.customerName} className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" placeholder="اسم العميل" required />
+                                    </div>
+
+                                    {/* رقم الهاتف - يظهر دايماً بس مهم أكتر في الواتساب */}
+                                    <div>
+                                        <label className="block text-sm font-extrabold text-slate-800 mb-2">
+                                            رقم الهاتف 
+                                            {contactChannel === 'واتساب' ? <span className="text-red-400 mr-1">*</span> : <span className="text-slate-400 font-medium mr-1">(اختياري)</span>}
+                                        </label>
+                                        <input name="customerPhone" type="tel" defaultValue={editingSale?.customerPhone}
+                                            className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all font-mono dir-ltr text-right"
+                                            placeholder="01xxxxxxxxx" 
+                                            required={contactChannel === 'واتساب'} />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-extrabold text-slate-800 mb-2">إيميل العميل <span className="text-slate-400 font-medium">(اختياري)</span></label>
+                                        <input name="customerEmail" type="email" defaultValue={editingSale?.customerEmail} className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all font-mono" placeholder="user@example.com" />
+                                    </div>
+                                </div>
+
+                                {/* الدفع */}
+                                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                                    <div className="text-xs font-black text-indigo-600 uppercase tracking-widest mb-2"><i className="fa-solid fa-wallet ml-1"></i> الدفع والخصم</div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-extrabold text-slate-800 mb-2">قيمة الخصم (ج.م)</label>
+                                            <input name="discount" type="number" defaultValue={editingSale?.discount || 0} className="w-full bg-white border-2 border-orange-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-orange-100 focus:border-orange-500 outline-none transition-all text-orange-700" placeholder="0" min="0" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-extrabold text-slate-800 mb-2">وسيلة الدفع (المحفظة)</label>
+                                            <select name="walletId" defaultValue={editingSale?.walletId || ""} className="w-full bg-white border-2 border-emerald-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-emerald-100 focus:border-emerald-600 outline-none transition-all">
+                                                <option value="">بدون محفظة</option>
+                                                {wallets.map(w => (
+                                                    <option key={w.id} value={w.id}>{w.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col gap-3">
+                                        <label className="flex items-center gap-3 p-3.5 bg-emerald-50 rounded-xl border border-emerald-100 cursor-pointer hover:bg-emerald-100 transition-colors">
+                                            <input type="checkbox" name="isPaid" defaultChecked={editingSale?.isPaid ?? true} className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500 border-emerald-300" />
+                                            <span className="text-sm font-bold text-emerald-800">مدفوع بالكامل ✅</span>
+                                        </label>
+                                        <div>
+                                            <label className="block text-sm font-extrabold text-slate-800 mb-2">المبلغ المتبقي (لو مدفعش كامل)</label>
+                                            <input name="remainingAmount" type="number" defaultValue={editingSale?.remainingAmount || 0} className="w-full bg-white border-2 border-red-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-red-100 focus:border-red-500 outline-none transition-all text-red-600" placeholder="0" min="0" />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* ملاحظات */}
+                                <div>
+                                    <label className="block text-sm font-extrabold text-slate-800 mb-2">ملاحظات (اختياري)</label>
+                                    <textarea name="notes" defaultValue={editingSale?.notes} className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all h-20 resize-none" placeholder="أي ملاحظات إضافية..."></textarea>
+                                </div>
+                            </form>
+                        </div>
+                        <div className="p-6 border-t border-slate-100 bg-white flex justify-end gap-3">
+                            <button onClick={() => { setShowSaleModal(false); setEditingSale(null); }} className="px-6 py-3 rounded-xl font-bold text-slate-600 bg-slate-50 border-2 border-slate-200 hover:bg-slate-100 transition-all">إلغاء</button>
+                            <button type="submit" form="saleForm" className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all flex items-center gap-2">
+                                <i className="fa-solid fa-check"></i> حفظ البيع
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            , document.body)}
+
+            {/* ============ ASSIGNED ACCOUNT DETAILS MODAL ============ */}
+            {assignedAccountDetails && createPortal(
+                <div className="animate-fade-in" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(4px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+                    <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
+                        <div className="p-6 bg-gradient-to-r from-purple-700 to-indigo-600 text-white flex justify-between items-center text-center">
+                            <h3 className="text-lg font-bold flex items-center justify-center gap-2 w-full">
+                                <i className="fa-solid fa-server text-2xl"></i> {assignedAccountDetails.isNew ? 'تم البيع وسحب حساب' : 'تفاصيل الحساب المربوط'}
+                            </h3>
+                        </div>
+                        <div className="p-8 space-y-5 flex flex-col">
+                            {assignedAccountDetails.isNew ? (
+                                <p className="text-center font-bold text-slate-600 text-sm mb-2">تم سحب هذا الحساب من المخزون بنجاح لتفعيل {assignedAccountDetails.productName}:</p>
+                            ) : (
+                                <p className="text-center font-bold text-slate-600 text-sm mb-2">تفاصيل الحساب الخاص بـ {assignedAccountDetails.productName}:</p>
+                            )}
+                            
+                            <div className="space-y-4">
+                                <div className="flex flex-col gap-1.5">
+                                    <label className="text-xs font-black text-slate-500 uppercase tracking-wide">البيانات / تفاصيل الدخول</label>
+                                    <div className="flex items-center">
+                                        <code className="text-sm font-mono font-bold text-slate-800 bg-slate-50 px-4 py-3 rounded-r-xl border border-r-0 border-slate-200 flex-1 truncate select-all dir-ltr text-left">
+                                            {assignedAccountDetails.email}
+                                        </code>
+                                        <button onClick={() => copyToClipboard(assignedAccountDetails.email, 'assigned-email')} className="h-[46px] w-[50px] flex items-center justify-center bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100 rounded-l-xl transition">
+                                            <i className={`fa-solid ${copiedId === 'assigned-email' ? 'fa-check text-emerald-500' : 'fa-copy'}`}></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                {assignedAccountDetails.password && (
+                                    <div className="flex flex-col gap-1.5">
+                                        <label className="text-xs font-black text-slate-500 uppercase tracking-wide">الباسورد</label>
+                                        <div className="flex items-center">
+                                            <code className="text-sm font-mono font-bold text-slate-800 bg-slate-50 px-4 py-3 rounded-r-xl border border-r-0 border-slate-200 flex-1 truncate select-all dir-ltr text-left">
+                                                {assignedAccountDetails.password}
+                                            </code>
+                                            <button onClick={() => copyToClipboard(assignedAccountDetails.password, 'assigned-pass')} className="h-[46px] w-[50px] flex items-center justify-center bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100 rounded-l-xl transition">
+                                                <i className={`fa-solid ${copiedId === 'assigned-pass' ? 'fa-check text-emerald-500' : 'fa-copy'}`}></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                                {assignedAccountDetails.twoFA && (
+                                    <div className="flex flex-col gap-1.5">
+                                        <label className="text-xs font-black text-purple-500 uppercase tracking-wide">2FA Link</label>
+                                        <div className="flex items-center">
+                                            <code className="text-sm font-mono font-bold text-purple-700 bg-purple-50 px-4 py-3 rounded-r-xl border border-r-0 border-purple-200 flex-1 truncate select-all dir-ltr text-left">
+                                                {assignedAccountDetails.twoFA}
+                                            </code>
+                                            <button onClick={() => copyToClipboard(assignedAccountDetails.twoFA, 'assigned-2fa')} className="h-[46px] w-[50px] flex items-center justify-center bg-purple-100 text-purple-700 hover:bg-purple-200 border border-purple-200 rounded-l-xl transition">
+                                                <i className={`fa-solid ${copiedId === 'assigned-2fa' ? 'fa-check text-emerald-500' : 'fa-copy'}`}></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <button onClick={() => setAssignedAccountDetails(null)} className="mt-4 w-full bg-slate-800 text-white py-3.5 rounded-xl font-bold hover:bg-slate-900 shadow-lg shadow-slate-200 transition-all">
+                                حسناً، إغلاق نافذة الحساب
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            , document.body)}
+
+            <style>{`
+                .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+                @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+            `}</style>
+        </div>
+    );
+}
