@@ -85,6 +85,7 @@ export const productsAPI = {
         const { data, error } = await supabase
             .from('products')
             .select('*')
+            .order('sort_order', { ascending: true, nullsFirst: false })
             .order('created_at', { ascending: false });
         return data || [];
     },
@@ -100,13 +101,14 @@ export const productsAPI = {
             category: product.category || '',
             inventory_product: product.inventoryProduct || '',
             fulfillment_type: product.fulfillmentType || 'client_account',
+            sort_order: product.sort_order || 999,
         });
         if (error) throw error;
         return id;
     },
 
     async update(id, product) {
-        const { error } = await supabase.from('products').update({
+        const updates = {
             name: product.name,
             price: product.price,
             duration: product.duration || 30,
@@ -114,8 +116,17 @@ export const productsAPI = {
             category: product.category || '',
             inventory_product: product.inventoryProduct || '',
             fulfillment_type: product.fulfillmentType || 'client_account',
-        }).eq('id', id);
+        };
+        if (product.sort_order !== undefined) updates.sort_order = product.sort_order;
+        const { error } = await supabase.from('products').update(updates).eq('id', id);
         if (error) throw error;
+    },
+
+    async updateSortOrder(items) {
+        // items = [{ id, sort_order }]
+        for (const item of items) {
+            await supabase.from('products').update({ sort_order: item.sort_order }).eq('id', item.id);
+        }
     },
 
     async delete(id) {

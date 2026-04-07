@@ -30,6 +30,7 @@ export default function Wallets() {
     const [showTxnModal, setShowTxnModal] = useState(null);
     const [txnType, setTxnType] = useState('deposit');
     const [selectedWallet, setSelectedWallet] = useState(null);
+    const [adjustBalanceWallet, setAdjustBalanceWallet] = useState(null); // direct balance edit
     const [usdRate, setUsdRate] = useState(getUsdRate());
     const [rateLoading, setRateLoading] = useState(false);
     const [rateLastUpdate, setRateLastUpdate] = useState(null);
@@ -181,6 +182,18 @@ export default function Wallets() {
         } catch (error) { console.error(error); }
     };
 
+    // تعديل الرصيد مباشرة بدون عملية
+    const handleAdjustBalance = async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const newBalance = Number(fd.get('newBalance'));
+        try {
+            await walletsAPI.update(adjustBalanceWallet.id, { balance: newBalance });
+            setAdjustBalanceWallet(null);
+            await refreshData();
+        } catch (error) { console.error(error); alert('حدث خطأ'); }
+    };
+
     const walletTxns = useMemo(() => {
         if (!selectedWallet) return [];
         return transactions.filter(t => (t.walletId || t.wallet_id) === selectedWallet.id).sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -300,8 +313,11 @@ export default function Wallets() {
                                     <button onClick={(e) => { e.stopPropagation(); setShowTxnModal(w.id); setTxnType('deposit'); }} className="flex-1 py-3.5 text-center text-emerald-600 hover:bg-emerald-50 transition font-bold text-sm flex items-center justify-center gap-1.5 border-l border-slate-100">
                                         <i className="fa-solid fa-plus-circle"></i> إيداع
                                     </button>
-                                    <button onClick={(e) => { e.stopPropagation(); setShowTxnModal(w.id); setTxnType('withdraw'); }} className="flex-1 py-3.5 text-center text-red-600 hover:bg-red-50 transition font-bold text-sm flex items-center justify-center gap-1.5">
+                                    <button onClick={(e) => { e.stopPropagation(); setShowTxnModal(w.id); setTxnType('withdraw'); }} className="flex-1 py-3.5 text-center text-red-600 hover:bg-red-50 transition font-bold text-sm flex items-center justify-center gap-1.5 border-l border-slate-100">
                                         <i className="fa-solid fa-minus-circle"></i> سحب
+                                    </button>
+                                    <button onClick={(e) => { e.stopPropagation(); setAdjustBalanceWallet(w); }} className="flex-1 py-3.5 text-center text-amber-600 hover:bg-amber-50 transition font-bold text-sm flex items-center justify-center gap-1.5">
+                                        <i className="fa-solid fa-pen-to-square"></i> تعديل
                                     </button>
                                 </div>
                             </div>
@@ -457,6 +473,41 @@ export default function Wallets() {
                                 <button type="button" onClick={() => setShowTxnModal(null)} className="flex-1 py-3 rounded-xl font-bold text-slate-600 bg-white border-2 border-slate-200 hover:bg-slate-50 transition">إلغاء</button>
                                 <button type="submit" className={`flex-1 text-white py-3 rounded-xl font-bold shadow-lg transition ${txnType === 'deposit' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200' : 'bg-red-600 hover:bg-red-700 shadow-red-200'}`}>
                                     {txnType === 'deposit' ? 'تأكيد الإيداع' : 'تأكيد السحب'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+            {/* ============ ADJUST BALANCE MODAL ============ */}
+            {adjustBalanceWallet && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
+                    <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
+                        <div className="p-6 bg-gradient-to-r from-amber-500 to-orange-500 text-white">
+                            <h3 className="text-xl font-bold flex items-center gap-2">
+                                <i className="fa-solid fa-pen-to-square"></i> تعديل رصيد المحفظة
+                            </h3>
+                            <p className="text-amber-100 text-sm font-medium mt-1">{adjustBalanceWallet.name}</p>
+                        </div>
+                        <form onSubmit={handleAdjustBalance} className="p-8 space-y-5">
+                            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm font-bold text-amber-800 flex items-start gap-2">
+                                <i className="fa-solid fa-circle-info mt-0.5"></i>
+                                <span>تعديل الرصيد مباشرة بدون تسجيل عملية إيداع أو سحب. مفيد لتصحيح الأرصدة.</span>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-extrabold text-slate-800 mb-2">الرصيد الحالي</label>
+                                <div className="text-2xl font-black text-slate-400 dir-ltr bg-slate-50 rounded-xl p-3 border border-slate-200">
+                                    {Number(adjustBalanceWallet.balance).toLocaleString()} <span className="text-sm">{adjustBalanceWallet.currency || 'EGP'}</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-extrabold text-slate-800 mb-2">الرصيد الجديد</label>
+                                <input name="newBalance" type="number" step="0.01" defaultValue={adjustBalanceWallet.balance} className="w-full bg-white border-2 border-amber-300 rounded-xl p-3.5 font-bold text-lg focus:ring-4 focus:ring-amber-100 focus:border-amber-500 outline-none transition-all text-amber-700" required autoFocus />
+                            </div>
+                            <div className="flex gap-3 pt-2">
+                                <button type="button" onClick={() => setAdjustBalanceWallet(null)} className="flex-1 py-3 rounded-xl font-bold text-slate-600 bg-slate-50 border-2 border-slate-200 hover:bg-slate-100 transition-all">إلغاء</button>
+                                <button type="submit" className="flex-1 py-3 rounded-xl font-bold text-white bg-amber-500 hover:bg-amber-600 shadow-lg shadow-amber-200 transition-all flex items-center justify-center gap-2">
+                                    <i className="fa-solid fa-check"></i> حفظ الرصيد
                                 </button>
                             </div>
                         </form>

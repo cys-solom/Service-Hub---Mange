@@ -33,6 +33,14 @@ export default function Products() {
         return matchSearch && matchCategory;
     });
 
+    // ترتيب المنتجات حسب التصنيف ثم sort_order
+    const sortedProducts = [...filteredProducts].sort((a, b) => {
+        const catA = (a.category || 'بدون تصنيف').toLowerCase();
+        const catB = (b.category || 'بدون تصنيف').toLowerCase();
+        if (catA !== catB) return catA.localeCompare(catB);
+        return (a.sort_order || 999) - (b.sort_order || 999);
+    });
+
     // حساب الإحصائيات
     const stats = {
         total: products.length,
@@ -94,6 +102,40 @@ export default function Products() {
     const openAddProduct = () => { setEditingProduct(null); setShowProductModal(true); };
     const openEditProduct = (p) => { setEditingProduct(p); setShowProductModal(true); };
 
+    // تحريك منتج لأعلى أو لأسفل
+    const moveProduct = async (productId, direction) => {
+        const idx = sortedProducts.findIndex(p => p.id === productId);
+        if (idx < 0) return;
+        const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+        if (swapIdx < 0 || swapIdx >= sortedProducts.length) return;
+
+        const current = sortedProducts[idx];
+        const swap = sortedProducts[swapIdx];
+
+        // تأكد إنهم في نفس التصنيف
+        if ((current.category || '') !== (swap.category || '')) return;
+
+        try {
+            const currentOrder = current.sort_order ?? idx;
+            const swapOrder = swap.sort_order ?? swapIdx;
+            await productsAPI.updateSortOrder([
+                { id: current.id, sort_order: swapOrder },
+                { id: swap.id, sort_order: currentOrder },
+            ]);
+            await refreshData();
+        } catch (error) {
+            console.error('Reorder error:', error);
+        }
+    };
+
+    // تجميع المنتجات حسب التصنيف
+    const groupedProducts = sortedProducts.reduce((groups, p) => {
+        const cat = p.category || 'بدون تصنيف';
+        if (!groups[cat]) groups[cat] = [];
+        groups[cat].push(p);
+        return groups;
+    }, {});
+
     return (
         <div className="space-y-6 animate-fade-in pb-24 font-sans text-slate-800">
 
@@ -151,80 +193,98 @@ export default function Products() {
             </div>
 
             {/* Products Grid */}
-            {filteredProducts.length === 0 ? (
+            {sortedProducts.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 bg-white rounded-3xl border-2 border-dashed border-slate-200 text-slate-400">
                     <i className="fa-solid fa-boxes-stacked text-5xl mb-4 opacity-30"></i>
                     <p className="font-bold text-lg">لا توجد منتجات {searchTerm ? 'تطابق البحث' : 'بعد'}</p>
                     {!searchTerm && <p className="text-sm mt-1">أضف المنتجات المتوفرة عندك ليتمكن فريقك من البيع</p>}
                 </div>
             ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {filteredProducts.map(p => (
-                        <div key={p.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group relative overflow-hidden p-6">
-                            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-500 to-indigo-500 transform origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></div>
-                            <div className="flex justify-between items-start mb-4">
-                                <div>
-                                    <h3 className="font-extrabold text-lg text-slate-800">{p.name}</h3>
-                                    <div className="flex flex-wrap gap-1.5 mt-1">
-                                        {p.category && <span className="text-xs bg-purple-50 text-purple-600 px-2 py-0.5 rounded font-bold">{p.category}</span>}
-                                        <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-bold flex items-center gap-1">
-                                            <i className="fa-solid fa-calendar-days text-[9px]"></i> {p.duration || 30} يوم
-                                        </span>
-                                    </div>
+                <div className="space-y-6">
+                    {Object.entries(groupedProducts).map(([category, catProducts]) => (
+                        <div key={category}>
+                            {/* Category Header */}
+                            <div className="flex items-center gap-3 mb-3">
+                                <div className="bg-purple-100 text-purple-700 px-4 py-1.5 rounded-xl text-sm font-extrabold flex items-center gap-2 border border-purple-200">
+                                    <i className="fa-solid fa-folder"></i> {category}
                                 </div>
-                                {isAdmin && (
-                                    <div className="flex gap-1">
-                                        <button onClick={() => openEditProduct(p)} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition"><i className="fa-solid fa-pen text-xs"></i></button>
-                                        <button onClick={() => deleteProduct(p.id)} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition"><i className="fa-solid fa-trash text-xs"></i></button>
-                                    </div>
-                                )}
+                                <span className="text-xs text-slate-400 font-bold">{catProducts.length} منتج</span>
+                                <div className="flex-1 h-px bg-slate-200"></div>
                             </div>
-                            {p.description && <p className="text-sm text-slate-500 mb-3">{p.description}</p>}
-                            <div className="mb-3">
-                                <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 py-0.5 rounded border border-slate-100 select-all">ID: {p.id}</span>
-                            </div>
-                            
-                            {/* Inventory link badge */}
-                            {(() => {
-                                const isLinked = p.inventoryProduct && p.fulfillmentType === 'from_stock';
-                                let stockCount = null;
-                                if (isLinked) {
-                                    stockCount = ctxAccounts.filter(a => 
-                                        a.productName === p.inventoryProduct && 
-                                        a.status !== 'damaged' && a.status !== 'completed' &&
-                                        (Number(a.allowed_uses) === -1 || Number(a.current_uses) < Number(a.allowed_uses))
-                                    ).length;
-                                }
-                                
-                                if (isLinked && stockCount === 0) {
-                                    return (
-                                        <div className="flex items-center gap-2 mb-3 p-2.5 rounded-xl text-xs font-bold border bg-red-50 text-red-700 border-red-200">
-                                            <i className="fa-solid fa-triangle-exclamation"></i>
-                                            <span>غير متوفر بالمخزون (Out of Stock)</span>
+                            {/* Products Grid */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                                {catProducts.map((p, idx) => (
+                                    <div key={p.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group relative overflow-hidden p-6">
+                                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-500 to-indigo-500 transform origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></div>
+                                        <div className="flex justify-between items-start mb-4">
+                                            <div>
+                                                <h3 className="font-extrabold text-lg text-slate-800">{p.name}</h3>
+                                                <div className="flex flex-wrap gap-1.5 mt-1">
+                                                    {p.category && <span className="text-xs bg-purple-50 text-purple-600 px-2 py-0.5 rounded font-bold">{p.category}</span>}
+                                                    <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                                                        <i className="fa-solid fa-calendar-days text-[9px]"></i> {p.duration || 30} يوم
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            {isAdmin && (
+                                                <div className="flex gap-1">
+                                                    {/* أسهم الترتيب */}
+                                                    <button onClick={() => moveProduct(p.id, 'up')} disabled={idx === 0} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition disabled:opacity-20 disabled:cursor-not-allowed" title="تحريك لأعلى"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
+                                                    <button onClick={() => moveProduct(p.id, 'down')} disabled={idx === catProducts.length - 1} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition disabled:opacity-20 disabled:cursor-not-allowed" title="تحريك لأسفل"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
+                                                    <button onClick={() => openEditProduct(p)} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition"><i className="fa-solid fa-pen text-xs"></i></button>
+                                                    <button onClick={() => deleteProduct(p.id)} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition"><i className="fa-solid fa-trash text-xs"></i></button>
+                                                </div>
+                                            )}
                                         </div>
-                                    );
-                                }
+                                        {p.description && <p className="text-sm text-slate-500 mb-3">{p.description}</p>}
+                                        <div className="mb-3">
+                                            <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 py-0.5 rounded border border-slate-100 select-all">ID: {p.id}</span>
+                                        </div>
+                                        
+                                        {/* Inventory link badge */}
+                                        {(() => {
+                                            const isLinked = p.inventoryProduct && p.fulfillmentType === 'from_stock';
+                                            let stockCount = null;
+                                            if (isLinked) {
+                                                stockCount = ctxAccounts.filter(a => 
+                                                    a.productName === p.inventoryProduct && 
+                                                    a.status !== 'damaged' && a.status !== 'completed' &&
+                                                    (Number(a.allowed_uses) === -1 || Number(a.current_uses) < Number(a.allowed_uses))
+                                                ).length;
+                                            }
+                                            
+                                            if (isLinked && stockCount === 0) {
+                                                return (
+                                                    <div className="flex items-center gap-2 mb-3 p-2.5 rounded-xl text-xs font-bold border bg-red-50 text-red-700 border-red-200">
+                                                        <i className="fa-solid fa-triangle-exclamation"></i>
+                                                        <span>غير متوفر بالمخزون (Out of Stock)</span>
+                                                    </div>
+                                                );
+                                            }
 
-                                if (p.inventoryProduct) {
-                                    return (
-                                        <div className={`flex items-center gap-2 mb-3 p-2.5 rounded-xl text-xs font-bold border ${p.fulfillmentType === 'from_stock' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-teal-50 text-teal-700 border-teal-200'}`}>
-                                            <i className={`fa-solid ${p.fulfillmentType === 'from_stock' ? 'fa-server' : 'fa-user-gear'}`}></i>
-                                            <span>{p.fulfillmentType === 'from_stock' ? `سحب من المخزون: ${p.inventoryProduct} (${stockCount} متاح)` : `تفعيل على حساب العميل`}</span>
+                                            if (p.inventoryProduct) {
+                                                return (
+                                                    <div className={`flex items-center gap-2 mb-3 p-2.5 rounded-xl text-xs font-bold border ${p.fulfillmentType === 'from_stock' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-teal-50 text-teal-700 border-teal-200'}`}>
+                                                        <i className={`fa-solid ${p.fulfillmentType === 'from_stock' ? 'fa-server' : 'fa-user-gear'}`}></i>
+                                                        <span>{p.fulfillmentType === 'from_stock' ? `سحب من المخزون: ${p.inventoryProduct} (${stockCount} متاح)` : `تفعيل على حساب العميل`}</span>
+                                                    </div>
+                                                );
+                                            }
+                                            
+                                            return (
+                                                <div className="flex items-center gap-2 mb-3 p-2.5 rounded-xl text-xs font-bold border bg-slate-50 text-slate-400 border-slate-200">
+                                                    <i className="fa-solid fa-link-slash"></i>
+                                                    <span>غير مربوط بالمخزون</span>
+                                                </div>
+                                            );
+                                        })()}
+
+                                        <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+                                            <span className="text-xs text-slate-400 font-bold">السعر</span>
+                                            <span className="text-2xl font-black text-slate-800 dir-ltr">{Number(p.price).toLocaleString()} <span className="text-sm text-slate-400">ج.م</span></span>
                                         </div>
-                                    );
-                                }
-                                
-                                return (
-                                    <div className="flex items-center gap-2 mb-3 p-2.5 rounded-xl text-xs font-bold border bg-slate-50 text-slate-400 border-slate-200">
-                                        <i className="fa-solid fa-link-slash"></i>
-                                        <span>غير مربوط بالمخزون</span>
                                     </div>
-                                );
-                            })()}
-
-                            <div className="flex justify-between items-center pt-3 border-t border-slate-100">
-                                <span className="text-xs text-slate-400 font-bold">السعر</span>
-                                <span className="text-2xl font-black text-slate-800 dir-ltr">{Number(p.price).toLocaleString()} <span className="text-sm text-slate-400">ج.م</span></span>
+                                ))}
                             </div>
                         </div>
                     ))}
