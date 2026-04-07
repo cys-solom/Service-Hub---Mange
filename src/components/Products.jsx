@@ -189,7 +189,7 @@ export default function Products() {
                                 const isLinked = p.inventoryProduct && p.fulfillmentType === 'from_stock';
                                 let stockCount = null;
                                 if (isLinked) {
-                                    stockCount = getLocalAccounts().filter(a => 
+                                    stockCount = ctxAccounts.filter(a => 
                                         a.productName === p.inventoryProduct && 
                                         a.status !== 'damaged' && a.status !== 'completed' &&
                                         (Number(a.allowed_uses) === -1 || Number(a.current_uses) < Number(a.allowed_uses))
