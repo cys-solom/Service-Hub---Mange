@@ -22,7 +22,7 @@ export default defineConfig({
     base: '/',
     build: {
         target: 'esnext',
-        minify: 'terser', // ضغط JS & CSS
+        minify: 'esbuild', // ضغط JS & CSS (مدمج مع Vite)
         cssCodeSplit: true, // يعمل Code Splitting للـ CSS
         rollupOptions: {
             output: {
