@@ -85,14 +85,14 @@ export const productsAPI = {
         const { data, error } = await supabase
             .from('products')
             .select('*')
-            .order('sort_order', { ascending: true, nullsFirst: false })
             .order('created_at', { ascending: false });
+        if (error) console.error('Products fetch error:', error);
         return data || [];
     },
 
     async create(product) {
         const id = 'PRD-' + Date.now();
-        const { error } = await supabase.from('products').insert({
+        const row = {
             id,
             name: product.name,
             price: product.price,
@@ -101,8 +101,8 @@ export const productsAPI = {
             category: product.category || '',
             inventory_product: product.inventoryProduct || '',
             fulfillment_type: product.fulfillmentType || 'client_account',
-            sort_order: product.sort_order || 999,
-        });
+        };
+        const { error } = await supabase.from('products').insert(row);
         if (error) throw error;
         return id;
     },
@@ -117,15 +117,19 @@ export const productsAPI = {
             inventory_product: product.inventoryProduct || '',
             fulfillment_type: product.fulfillmentType || 'client_account',
         };
-        if (product.sort_order !== undefined) updates.sort_order = product.sort_order;
         const { error } = await supabase.from('products').update(updates).eq('id', id);
         if (error) throw error;
     },
 
     async updateSortOrder(items) {
         // items = [{ id, sort_order }]
-        for (const item of items) {
-            await supabase.from('products').update({ sort_order: item.sort_order }).eq('id', item.id);
+        // هذه العملية اختيارية — لو عمود sort_order مش موجود مش هتعمل مشكلة
+        try {
+            for (const item of items) {
+                await supabase.from('products').update({ sort_order: item.sort_order }).eq('id', item.id);
+            }
+        } catch (e) {
+            console.warn('sort_order column may not exist yet:', e.message);
         }
     },
 
