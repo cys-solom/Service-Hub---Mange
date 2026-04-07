@@ -213,6 +213,10 @@ export default function Sales() {
             };
 
             if (editingSale) {
+                // حافظ على بيانات المخزون الأصلية عند التعديل
+                data.fromInventory = editingSale.fromInventory;
+                data.assignedAccountEmail = editingSale.assignedAccountEmail;
+                data.assignedAccountId = editingSale.assignedAccountId;
                 await salesAPI.update(editingSale.id, data);
             } else {
                 // سحب من المخزون لو المنتج مربوط بالمخزون ونوعه from_stock
@@ -297,12 +301,39 @@ export default function Sales() {
     };
 
     const deleteSale = async (id) => {
-        if (!confirm('حذف هذا البيع؟')) return;
-        try {
-            await salesAPI.delete(id);
-            await refreshData();
-        } catch (error) {
-            console.error(error);
+        const sale = sales.find(s => s.id === id);
+        if (!sale) return;
+
+        // لو الأوردر مربوط بحساب من المخزون
+        if (sale.fromInventory && sale.assignedAccountId) {
+            const choice = prompt(
+                `هذا الأوردر مربوط بحساب من المخزون:\n${sale.assignedAccountEmail}\n\nهل تريد إرجاع الحساب للمخزون؟\n\nاكتب:\n1 = إرجاع كـ "متاح" (available)\n2 = إرجاع كـ "مستخدم" (used)\n3 = حذف الأوردر فقط بدون إرجاع\n\nأو اضغط إلغاء للتراجع`
+            );
+            if (!choice) return; // ألغى
+
+            try {
+                if (choice === '1' || choice === '2') {
+                    const newStatus = choice === '1' ? 'available' : 'used';
+                    const account = (ctxAccounts || []).find(a => a.id === sale.assignedAccountId);
+                    if (account) {
+                        const newUses = Math.max(0, Number(account.current_uses) - 1);
+                        await accountsAPI.update(account.id, { status: newStatus, current_uses: newUses });
+                    }
+                }
+                await salesAPI.delete(id);
+                await refreshData();
+            } catch (error) {
+                console.error(error);
+                alert('حدث خطأ: ' + (error?.message || ''));
+            }
+        } else {
+            if (!confirm('حذف هذا البيع؟')) return;
+            try {
+                await salesAPI.delete(id);
+                await refreshData();
+            } catch (error) {
+                console.error(error);
+            }
         }
     };
 
@@ -549,6 +580,8 @@ export default function Sales() {
                                             {products.map(p => {
                                                 let isOut = false;
                                                 let availCount = null;
+                                                // لو بنعدل أوردر — المنتج الحالي يفضل متاح للاختيار
+                                                const isCurrentProduct = editingSale && editingSale.productName === p.name;
                                                 if (p.inventoryProduct && p.fulfillmentType === 'from_stock') {
                                                     const availItems = (ctxAccounts || []).filter(a => 
                                                         a.productName === p.inventoryProduct && 
@@ -556,10 +589,10 @@ export default function Sales() {
                                                         (Number(a.allowed_uses) === -1 || Number(a.current_uses) < Number(a.allowed_uses))
                                                     );
                                                     availCount = availItems.length;
-                                                    isOut = availCount === 0;
+                                                    isOut = availCount === 0 && !isCurrentProduct;
                                                 }
                                                 return <option key={p.id} value={p.name} disabled={isOut}>
-                                                    {p.name} — {p.price} ج.م {availCount !== null ? `(${availCount} متاح)` : ''} {isOut ? '— نفد من المخزون' : ''}
+                                                    {p.name} — {p.price} ج.م {availCount !== null ? `(${availCount} متاح)` : ''} {isOut ? '— نفد من المخزون' : ''} {isCurrentProduct && availCount === 0 ? '(الحالي)' : ''}
                                                 </option>;
                                             })}
                                         </select>
