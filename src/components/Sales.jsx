@@ -324,6 +324,53 @@ export default function Sales() {
         }
     };
 
+    // ========= عكس المحفظة عند حذف مبيعة =========
+    const reverseWalletForSale = async (sale) => {
+        if (!sale || !sale.walletId) return;
+
+        // حساب المبلغ اللي اتدفع في المحفظة
+        let depositedAmount = 0;
+        if (sale.isPaid) {
+            depositedAmount = Number(sale.finalPrice) || 0;
+        } else {
+            // لو مدفوع جزئي: الإجمالي - المتبقي = اللي اتدفع
+            const remaining = Number(sale.remainingAmount) || 0;
+            const total = Number(sale.finalPrice) || 0;
+            depositedAmount = total - remaining;
+        }
+
+        if (depositedAmount <= 0) return;
+
+        try {
+            // البحث عن سجل الإيداع المطابق في حركات المحفظة
+            const txns = await walletsAPI.getTransactions(sale.walletId);
+            const matchingTxn = txns.find(t =>
+                t.type === 'deposit' &&
+                Math.abs(Number(t.amount) - depositedAmount) < 0.01 &&
+                t.description && (
+                    t.description.includes(sale.productName) ||
+                    (sale.customerEmail && t.description.includes(sale.customerEmail))
+                )
+            );
+
+            if (matchingTxn) {
+                // حذف السجل + عكس الرصيد تلقائياً
+                await walletsAPI.deleteTransaction(matchingTxn);
+            } else {
+                // Fallback: لو مالقيناش السجل — نسحب المبلغ يدوياً
+                await walletsAPI.withdraw(
+                    sale.walletId,
+                    depositedAmount,
+                    `استرداد — حذف بيع ${sale.productName}`,
+                    'حذف مبيعة',
+                    'System'
+                );
+            }
+        } catch (e) {
+            console.warn('Error reversing wallet for deleted sale:', e);
+        }
+    };
+
     const deleteSale = async (id) => {
         const sale = sales.find(s => s.id === id);
         if (!sale) return;
@@ -339,6 +386,8 @@ export default function Sales() {
         } else {
             if (!confirm('حذف هذا البيع؟')) return;
             try {
+                // عكس المحفظة قبل الحذف
+                await reverseWalletForSale(sale);
                 await salesAPI.delete(id);
                 await refreshData();
             } catch (error) {
@@ -358,6 +407,10 @@ export default function Sales() {
                     await accountsAPI.update(account.id, { status: returnStatus, current_uses: newUses });
                 }
             }
+            // عكس المحفظة قبل الحذف
+            const sale = sales.find(s => s.id === deleteModal.saleId);
+            if (sale) await reverseWalletForSale(sale);
+
             await salesAPI.delete(deleteModal.saleId);
             setDeleteModal(null);
             await refreshData();

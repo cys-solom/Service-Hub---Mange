@@ -71,8 +71,9 @@ export const DataProvider = ({ children }) => {
     const [activeTab, setActiveTab] = useState('dashboard');
     const [renewalTarget, setRenewalTarget] = useState(null);
 
-    // --- Realtime debounce ref ---
+    // --- Realtime refs ---
     const realtimeTimerRef = useRef(null);
+    const syncChannelRef = useRef(null);
 
     // إعادة ترتيب المنتجات عند تغيير الترتيب أو البيانات
     useEffect(() => {
@@ -106,8 +107,10 @@ export const DataProvider = ({ children }) => {
         ]).catch(() => {});
     };
 
-    // --- Refresh All Data ---
-    const refreshData = useCallback(async () => {
+    // ============ DATA FETCHING ============
+
+    // جلب البيانات من الداتابيز (داخلي — بدون بث)
+    const _fetchData = useCallback(async () => {
         if (!user) return;
         setLoading(true);
 
@@ -166,55 +169,85 @@ export const DataProvider = ({ children }) => {
         setLoading(false);
     }, [user]);
 
-    // Load data when user logs in
-    useEffect(() => {
-        refreshData();
-    }, [user, refreshData]);
+    // تحديث البيانات + بث إشارة لباقي الأجهزة المتصلة
+    const refreshData = useCallback(async () => {
+        await _fetchData();
+        // بث إشارة تحديث لكل الأجهزة الثانية
+        try {
+            if (syncChannelRef.current) {
+                syncChannelRef.current.send({
+                    type: 'broadcast',
+                    event: 'data_changed',
+                    payload: { ts: Date.now() }
+                });
+            }
+        } catch (e) {
+            // تجاهل أخطاء البث
+        }
+    }, [_fetchData]);
 
-    // ============ SUPABASE REALTIME ============
-    // الاشتراك في التحديثات اللحظية لكل الجداول
+    // تحميل البيانات أول مرة لما المستخدم يسجل دخول
+    useEffect(() => {
+        _fetchData();
+    }, [user, _fetchData]);
+
+    // ============ SUPABASE REALTIME (DUAL APPROACH) ============
+    // 1) postgres_changes — يراقب تغييرات الداتابيز مباشرة (محتاج تفعيل Replication)
+    // 2) broadcast — بث من جهاز لجهاز (يشتغل دايماً بدون إعدادات إضافية)
     useEffect(() => {
         if (!user) return;
 
-        // Debounced refresh — عشان لو في تغييرات كتير في نفس الوقت ميعملش refresh كل مرة
-        const debouncedRefresh = () => {
+        // Debounced fetch — عشان لو في تغييرات كتير في نفس الوقت ميعملش fetch كل مرة
+        const debouncedFetch = () => {
             if (realtimeTimerRef.current) clearTimeout(realtimeTimerRef.current);
             realtimeTimerRef.current = setTimeout(() => {
-                refreshData();
-            }, 500); // انتظر 500ms بعد آخر تغيير قبل ما يعمل refresh
+                _fetchData();
+            }, 500);
         };
 
-        // إنشاء channel واحد يراقب كل الجداول
-        const channel = supabase.channel('realtime-all-tables');
-
-        // الاشتراك في كل جدول
+        // ========= Channel 1: postgres_changes =========
+        const pgChannel = supabase.channel('realtime-pg-changes');
         REALTIME_TABLES.forEach(table => {
-            channel.on(
+            pgChannel.on(
                 'postgres_changes',
                 { event: '*', schema: 'public', table },
                 (payload) => {
-                    console.log(`🔄 Realtime update on [${table}]:`, payload.eventType);
-                    debouncedRefresh();
+                    console.log(`🔄 DB change [${table}]:`, payload.eventType);
+                    debouncedFetch();
                 }
             );
         });
-
-        // تفعيل الاشتراك
-        channel.subscribe((status) => {
+        pgChannel.subscribe((status) => {
             if (status === 'SUBSCRIBED') {
-                console.log('✅ Realtime subscribed to all tables');
-            } else if (status === 'CHANNEL_ERROR') {
-                console.warn('⚠️ Realtime channel error, will retry...');
+                console.log('✅ Postgres changes: subscribed');
+            }
+        });
+
+        // ========= Channel 2: Broadcast (client-to-client sync) =========
+        // self: false — عشان اللي بيبث ميستقبلش رسالته التانية ومتعملش loop
+        const syncChannel = supabase.channel('service-hub-sync', {
+            config: { broadcast: { self: false } }
+        });
+        syncChannel.on('broadcast', { event: 'data_changed' }, () => {
+            console.log('📡 Broadcast received: data changed by another client');
+            debouncedFetch();
+        });
+        syncChannel.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                console.log('✅ Broadcast sync: subscribed');
+                syncChannelRef.current = syncChannel;
             }
         });
 
         // تنظيف عند الخروج
         return () => {
             if (realtimeTimerRef.current) clearTimeout(realtimeTimerRef.current);
-            supabase.removeChannel(channel);
-            console.log('🔌 Realtime unsubscribed');
+            syncChannelRef.current = null;
+            supabase.removeChannel(pgChannel);
+            supabase.removeChannel(syncChannel);
+            console.log('🔌 Realtime: unsubscribed from all channels');
         };
-    }, [user, refreshData]);
+    }, [user, _fetchData]);
 
     return (
         <DataContext.Provider value={{
