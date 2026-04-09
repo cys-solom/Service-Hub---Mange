@@ -455,7 +455,8 @@ export default function Sales() {
         const sale = sales.find(s => s.id === id);
         if (!sale) return;
         try {
-            await salesAPI.togglePaid(id, !sale.isPaid, sale.finalPrice);
+            const newPaid = !sale.isPaid;
+            await salesAPI.togglePaid(id, newPaid, sale.finalPrice, newPaid ? sale : null);
             await refreshData();
         } catch (error) {
             console.error(error);
@@ -466,7 +467,8 @@ export default function Sales() {
         const sale = sales.find(s => s.id === id);
         if (!sale) return;
         try {
-            await salesAPI.toggleActivated(id, !sale.isActivated);
+            const newActivated = !sale.isActivated;
+            await salesAPI.toggleActivated(id, newActivated, newActivated ? sale : null);
             await refreshData();
         } catch (error) {
             console.error(error);

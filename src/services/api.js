@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import telegram from './telegram';
 
 // ==========================================
 // API Service - Replaces all localStorage ops
@@ -207,6 +208,7 @@ export const accountsAPI = {
             workspace_cost: account.workspaceCost || 0,
         }).select().single();
         if (error) throw error;
+        telegram.stockAdded(account.productName, 1, account.isWorkspace ? 'accounts' : 'accounts');
         return data;
     },
 
@@ -226,6 +228,7 @@ export const accountsAPI = {
         }));
         const { error } = await supabase.from('accounts').insert(rows);
         if (error) throw error;
+        telegram.stockAdded(accounts[0]?.productName || 'غير محدد', rows.length);
     },
 
     async update(id, updates) {
@@ -273,13 +276,15 @@ export const accountsAPI = {
             status: newStatus
         }).eq('id', target.id);
 
-        return {
+        const result = {
             ...target,
             current_uses: newUses,
             status: newStatus,
             productName: target.product_name,
             twoFA: target.two_fa,
         };
+        telegram.inventoryPulled(sectionName, target.email);
+        return result;
     }
 };
 
@@ -401,6 +406,7 @@ export const salesAPI = {
         }
         const { data, error } = await supabase.from('sales').insert(insertData).select().single();
         if (error) throw error;
+        telegram.newSale(sale);
         return data;
     },
 
@@ -435,17 +441,19 @@ export const salesAPI = {
         await supabase.from('sales').delete().eq('id', id);
     },
 
-    async togglePaid(id, isPaid, finalPrice) {
+    async togglePaid(id, isPaid, finalPrice, saleInfo) {
         await supabase.from('sales').update({
             is_paid: isPaid,
             remaining_amount: isPaid ? 0 : finalPrice
         }).eq('id', id);
+        if (isPaid && saleInfo) telegram.debtPaid(saleInfo);
     },
 
-    async toggleActivated(id, isActivated) {
+    async toggleActivated(id, isActivated, saleInfo) {
         await supabase.from('sales').update({
             is_activated: isActivated,
         }).eq('id', id);
+        if (isActivated && saleInfo) telegram.saleActivated(saleInfo);
     }
 };
 
@@ -752,15 +760,17 @@ export const problemsAPI = {
             is_resolved: false,
         }).select().single();
         if (error) throw error;
+        telegram.newProblem({ accountEmail: problem.customerName, description: problem.description });
         return data;
     },
 
-    async markResolved(id) {
+    async markResolved(id, problemInfo) {
         const { error } = await supabase.from('problems').update({
             is_resolved: true,
             resolved_at: new Date().toISOString(),
         }).eq('id', id);
         if (error) throw error;
+        if (problemInfo) telegram.problemResolved({ accountEmail: problemInfo.customerName, description: problemInfo.description });
     },
 
     async delete(id) {

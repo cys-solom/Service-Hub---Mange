@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { salesAPI, walletsAPI } from '../services/api';
+import telegram from '../services/telegram';
 
 export default function Renewals() {
     useEffect(() => { window.scrollTo(0, 0); }, []);
@@ -113,6 +114,7 @@ export default function Renewals() {
                 await walletsAPI.deposit(alertItem.walletId, price, `تجديد سريع — ${alertItem.productName} — ${alertItem.customerName || alertItem.customerEmail}`, 'تجديد', 'System');
             }
 
+            telegram.saleRenewed(alertItem, duration);
             setQuickRenewing(null);
             await refreshData();
         } catch (error) {
@@ -167,6 +169,7 @@ export default function Renewals() {
                 await walletsAPI.deposit(walletId, finalPrice, `تجديد — ${newSale.productName} — ${newSale.customerName || newSale.customerEmail}`, 'تجديد', 'System');
             }
 
+            telegram.saleRenewed({ ...sale, ...newSale }, duration);
             setShowRenewModal(null);
             await refreshData();
         } catch (error) {
@@ -177,8 +180,9 @@ export default function Renewals() {
 
     // تعليم كمدفوع
     const markPaid = async (id) => {
+        const sale = alerts.unpaid.find(s => s.id === id);
         try {
-            await salesAPI.togglePaid(id, true, 0);
+            await salesAPI.togglePaid(id, true, 0, sale || null);
             await refreshData();
         } catch (error) {
             console.error(error);
