@@ -1,10 +1,14 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { accountsAPI } from '../services/api';
 
 export default function Sidebar ({ isOpen, onClose }) {
-    const { activeTab, setActiveTab, sales, accounts } = useData();
+    const { activeTab, setActiveTab, sales, accounts, sections, refreshData } = useData();
     const { user, logout, hasPermission } = useAuth();
+    const [showQuickPull, setShowQuickPull] = useState(false);
+    const [pullResult, setPullResult] = useState(null);
+    const [copiedField, setCopiedField] = useState(null);
 
     // التوجيه التلقائي للمودريتور
     useEffect(() => {
@@ -29,6 +33,37 @@ export default function Sidebar ({ isOpen, onClose }) {
             return count;
         } catch { return 0; }
     }, [sales, activeTab]);
+
+    // Available counts per section
+    const sectionAvailable = useMemo(() => {
+        const c = {};
+        (accounts || []).filter(a => a.status === 'available').forEach(a => { c[a.productName] = (c[a.productName] || 0) + 1; });
+        return c;
+    }, [accounts]);
+
+    const totalAvailable = useMemo(() => (accounts || []).filter(a => a.status === 'available').length, [accounts]);
+
+    // Quick pull handler
+    const handleQuickPull = async (sectionName) => {
+        try {
+            const result = await accountsAPI.pullNext(sectionName);
+            if (result.empty) {
+                setPullResult({ empty: true, name: sectionName });
+            } else {
+                let txt = result.email;
+                if (result.password) txt += `\n${result.password}`;
+                if (result.twoFA || result.two_fa) txt += `\n${result.twoFA || result.two_fa}`;
+                navigator.clipboard.writeText(txt);
+                setPullResult({ ...result, name: sectionName });
+                await refreshData();
+            }
+            setTimeout(() => setPullResult(null), 4000);
+        } catch (error) {
+            console.error(error);
+        }
+    };
+
+    const copyField = (text, id) => { navigator.clipboard.writeText(text); setCopiedField(id); setTimeout(() => setCopiedField(null), 1500); };
 
     const allTabs = [
         { id: 'dashboard', label: 'الرئيسية', icon: 'fa-chart-pie' },
@@ -95,6 +130,80 @@ export default function Sidebar ({ isOpen, onClose }) {
                             <span className="text-sm">المستخدمين</span>
                         </button>
                     )}
+
+                    {/* ===== QUICK PULL SECTION ===== */}
+                    {hasPermission('accounts') && sections && sections.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-slate-800">
+                            <button onClick={() => setShowQuickPull(!showQuickPull)}
+                                className="w-full flex items-center justify-between px-4 py-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-all">
+                                <div className="flex items-center gap-2">
+                                    <i className="fa-solid fa-bolt text-sm"></i>
+                                    <span className="text-xs font-bold">سحب سريع</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] bg-emerald-500/20 px-2 py-0.5 rounded-full font-black">{totalAvailable}</span>
+                                    <i className={`fa-solid fa-chevron-down text-[10px] transition-transform ${showQuickPull ? 'rotate-180' : ''}`}></i>
+                                </div>
+                            </button>
+
+                            {showQuickPull && (
+                                <div className="mt-2 space-y-1 animate-fade-in">
+                                    {sections.map(sec => {
+                                        const avail = sectionAvailable[sec.name] || 0;
+                                        const isCodes = sec.type === 'codes';
+                                        return (
+                                            <button key={sec.id} onClick={() => handleQuickPull(sec.name)}
+                                                disabled={avail === 0}
+                                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${avail > 0
+                                                    ? 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                                                    : 'text-slate-600 cursor-not-allowed'}`}>
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <i className={`fa-solid ${isCodes ? 'fa-key text-amber-500' : 'fa-user-shield text-indigo-400'} text-[10px]`}></i>
+                                                    <span className="font-bold truncate">{sec.name}</span>
+                                                </div>
+                                                <span className={`text-[10px] px-1.5 py-0.5 rounded font-black flex-shrink-0 ${avail > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-600'}`}>{avail}</span>
+                                            </button>
+                                        );
+                                    })}
+
+                                    {/* Pull Result Toast */}
+                                    {pullResult && (
+                                        <div className={`mt-2 p-3 rounded-xl text-xs font-bold animate-fade-in ${pullResult.empty ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
+                                            {pullResult.empty ? (
+                                                <div className="flex items-center gap-2">
+                                                    <i className="fa-solid fa-box-open"></i>
+                                                    <span>{pullResult.name} فارغ!</span>
+                                                </div>
+                                            ) : (
+                                                <div className="space-y-1.5">
+                                                    <div className="flex items-center gap-2">
+                                                        <i className="fa-solid fa-check-circle"></i>
+                                                        <span>تم السحب ✓ ({pullResult.name})</span>
+                                                    </div>
+                                                    <div className="bg-slate-900/50 rounded-lg p-2 space-y-1 dir-ltr text-left">
+                                                        <div className="flex items-center justify-between">
+                                                            <code className="text-emerald-200 truncate flex-1">{pullResult.email}</code>
+                                                            <button onClick={() => copyField(pullResult.email, 'se')} className="text-emerald-400 hover:text-white mr-1 flex-shrink-0">
+                                                                <i className={`fa-solid ${copiedField === 'se' ? 'fa-check' : 'fa-copy'} text-[9px]`}></i>
+                                                            </button>
+                                                        </div>
+                                                        {pullResult.password && (
+                                                            <div className="flex items-center justify-between text-slate-400">
+                                                                <code className="truncate flex-1">{pullResult.password}</code>
+                                                                <button onClick={() => copyField(pullResult.password, 'sp')} className="hover:text-white mr-1 flex-shrink-0">
+                                                                    <i className={`fa-solid ${copiedField === 'sp' ? 'fa-check' : 'fa-copy'} text-[9px]`}></i>
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </nav>
 
                 <div className="p-4 border-t border-slate-800 bg-slate-900">
@@ -112,6 +221,11 @@ export default function Sidebar ({ isOpen, onClose }) {
                     </button>
                 </div>
             </aside>
+
+            <style>{`
+                .animate-fade-in { animation: fadeIn 0.2s ease-out forwards; }
+                @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+            `}</style>
         </>
     );
 }

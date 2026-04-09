@@ -19,8 +19,40 @@ export default function Accounts() {
     const [visibleCount, setVisibleCount] = useState(20);
     const [pulledResult, setPulledResult] = useState(null);
     const [selectedSection, setSelectedSection] = useState(null);
+    // Quick links state
+    const [quickLinks, setQuickLinks] = useState([]);
+    const [showLinkModal, setShowLinkModal] = useState(false);
+    const [linksExpanded, setLinksExpanded] = useState(true);
 
     useEffect(() => { window.scrollTo(0, 0); }, []);
+
+    // Load quick links from localStorage
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem('sh_quick_links');
+            if (saved) setQuickLinks(JSON.parse(saved));
+        } catch (e) { console.error(e); }
+    }, []);
+
+    const saveQuickLinks = (links) => {
+        setQuickLinks(links);
+        localStorage.setItem('sh_quick_links', JSON.stringify(links));
+    };
+
+    const handleAddLink = (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const label = fd.get('linkLabel')?.trim();
+        const url = fd.get('linkUrl')?.trim();
+        if (!label || !url) return;
+        const newLink = { id: Date.now(), label, url };
+        saveQuickLinks([...quickLinks, newLink]);
+        setShowLinkModal(false);
+    };
+
+    const deleteLink = (id) => {
+        saveQuickLinks(quickLinks.filter(l => l.id !== id));
+    };
 
     // Sync from context
     useEffect(() => {
@@ -44,6 +76,16 @@ export default function Accounts() {
         full: sectionAccounts.filter(a => a.status === 'completed').length,
     }), [sectionAccounts]);
 
+    // Global stats for overview
+    const globalStats = useMemo(() => ({
+        total: accounts.length,
+        available: accounts.filter(a => a.status === 'available').length,
+        used: accounts.filter(a => a.status === 'used').length,
+        full: accounts.filter(a => a.status === 'completed').length,
+        accountSections: sections.filter(s => s.type === 'accounts').length,
+        codeSections: sections.filter(s => s.type === 'codes').length,
+    }), [accounts, sections]);
+
     // Filtered
     const filteredAccounts = useMemo(() => {
         return sectionAccounts.filter(acc => {
@@ -63,6 +105,13 @@ export default function Accounts() {
         return c;
     }, [accounts]);
 
+    // Available counts per section
+    const sectionAvailable = useMemo(() => {
+        const c = {};
+        accounts.filter(a => a.status === 'available').forEach(a => { c[a.productName] = (c[a.productName] || 0) + 1; });
+        return c;
+    }, [accounts]);
+
     // Which products link to which section
     const linkedProductsMap = useMemo(() => {
         const map = {};
@@ -74,6 +123,10 @@ export default function Accounts() {
         });
         return map;
     }, [products]);
+
+    // Separate sections by type
+    const accountSections = useMemo(() => sections.filter(s => s.type === 'accounts'), [sections]);
+    const codeSections = useMemo(() => sections.filter(s => s.type === 'codes'), [sections]);
 
     // ========= Section CRUD =========
     const handleCreateSection = async (e) => {
@@ -120,13 +173,11 @@ export default function Accounts() {
                 const twoFABaseUrl = 'https://www.servicehub-mail.cloud/2fa-code/';
                 const rows = bulkData.split('\n').map(l => l.trim()).filter(l => l).map(line => {
                     let email = line, password = '', twoFA = '';
-                    // Support formats: email:pass, email|pass, email|pass|2fa, email:pass:2fa
                     const separator = line.includes('|') ? '|' : ':';
                     const parts = line.split(separator).map(p => p.trim());
                     email = parts[0] || '';
                     password = parts[1] || '';
                     if (parts[2]) {
-                        // Auto-prefix 2FA with URL if it's just a code
                         const rawCode = parts[2].trim();
                         twoFA = rawCode.startsWith('http') ? rawCode : twoFABaseUrl + rawCode;
                     }
@@ -186,7 +237,7 @@ export default function Accounts() {
             const newUses = (acc.current_uses || 0) + 1;
             const newStatus = (acc.allowed_uses !== -1 && newUses >= acc.allowed_uses) ? 'completed' : 'used';
             await accountsAPI.update(acc.id, { current_uses: newUses, status: newStatus });
-            
+
             let t = `البيانات: ${acc.email}`;
             if (acc.password) t += `\nالباسورد: ${acc.password}`;
             if (acc.twoFA) t += `\n2FA: ${acc.twoFA}`;
@@ -199,18 +250,19 @@ export default function Accounts() {
         }
     };
 
-    const handlePullNext = async () => {
-        if (!currentSection) return;
+    const handlePullNext = async (sectionName) => {
+        const targetName = sectionName || currentSection?.name;
+        if (!targetName) return;
         try {
-            const result = await accountsAPI.pullNext(currentSection.name);
+            const result = await accountsAPI.pullNext(targetName);
             if (result.empty) {
-                setPulledResult({ empty: true });
+                setPulledResult({ empty: true, sectionName: targetName });
             } else {
                 let txt = result.email;
                 if (result.password) txt += `\n${result.password}`;
                 if (result.twoFA || result.two_fa) txt += `\n${result.twoFA || result.two_fa}`;
                 navigator.clipboard.writeText(txt);
-                setPulledResult(result);
+                setPulledResult({ ...result, sectionName: targetName });
                 await refreshData();
             }
         } catch (error) {
@@ -232,99 +284,262 @@ export default function Accounts() {
 
     const isCodesSection = currentSection?.type === 'codes';
 
-    return (
-        <div className="space-y-6 animate-fade-in pb-24 font-sans text-slate-800">
-            {/* Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-gradient-to-br from-purple-600 to-indigo-700 rounded-2xl p-5 text-white shadow-lg">
-                    <p className="text-purple-200 text-sm font-bold mb-1">إجمالي العناصر</p>
-                    <h3 className="text-3xl font-extrabold">{accountStats.total}</h3>
-                </div>
-                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                    <p className="text-slate-500 text-sm font-bold mb-1">متاح</p>
-                    <h3 className="text-3xl font-extrabold text-emerald-600">{accountStats.available}</h3>
-                </div>
-                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                    <p className="text-slate-500 text-sm font-bold mb-1">مستخدم</p>
-                    <h3 className="text-3xl font-extrabold text-orange-600">{accountStats.used}</h3>
-                </div>
-                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                    <p className="text-slate-500 text-sm font-bold mb-1">مكتمل</p>
-                    <h3 className="text-3xl font-extrabold text-slate-400">{accountStats.full}</h3>
+    // =============== Section Card Component ===============
+    const SectionCard = ({ sec }) => {
+        const count = sectionCounts[sec.name] || 0;
+        const avail = sectionAvailable[sec.name] || 0;
+        const linkedProds = linkedProductsMap[sec.name] || [];
+        const isCodes = sec.type === 'codes';
+        return (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-xl hover:border-indigo-200 transition-all overflow-hidden group relative">
+                {/* Quick Pull Button - Top Left */}
+                <button
+                    onClick={(e) => { e.stopPropagation(); handlePullNext(sec.name); }}
+                    className={`absolute top-3 left-14 z-10 w-9 h-9 flex items-center justify-center rounded-xl font-bold text-sm transition-all shadow-sm border ${avail > 0 ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100' : 'bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed'}`}
+                    title={`سحب من ${sec.name}`}
+                    disabled={avail === 0}
+                >
+                    <i className="fa-solid fa-bolt"></i>
+                </button>
+                {/* Delete Button */}
+                <button onClick={(e) => { e.stopPropagation(); deleteSection(sec); }} className="absolute top-3 left-3 w-9 h-9 flex items-center justify-center rounded-xl text-red-400 hover:text-red-600 hover:bg-red-50 transition z-10 border border-red-100" title="حذف القسم">
+                    <i className="fa-solid fa-trash text-xs"></i>
+                </button>
+
+                <div onClick={() => { setSelectedSection(sec.id); setSearchTerm(''); setFilterStatus('all'); setVisibleCount(20); }} className="cursor-pointer p-5 flex flex-col h-full">
+                    <div className="flex items-center gap-3 mb-3">
+                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl group-hover:scale-110 transition-all shadow-sm ${isCodes ? 'bg-amber-50 text-amber-600 group-hover:bg-amber-600 group-hover:text-white' : 'bg-indigo-50 text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white'}`}>
+                            <i className={`fa-solid ${isCodes ? 'fa-key' : 'fa-user-shield'}`}></i>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <h4 className="font-extrabold text-lg text-slate-800 truncate">{sec.name}</h4>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isCodes ? 'bg-amber-50 text-amber-600 border border-amber-200' : 'bg-indigo-50 text-indigo-600 border border-indigo-200'}`}>
+                                    {isCodes ? 'أكواد' : 'حسابات'}
+                                </span>
+                                {linkedProds.length > 0 && linkedProds.map(pn => (
+                                    <span key={pn} className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-purple-50 text-purple-600 border border-purple-200">
+                                        <i className="fa-solid fa-link text-[8px] ml-0.5"></i> {pn}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="mt-auto space-y-2">
+                        {/* Progress Bar */}
+                        <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                            <div className="flex justify-between text-xs font-bold text-slate-500 mb-2">
+                                <span>إجمالي: {count}</span>
+                                <span className="text-emerald-600">متاح: {avail}</span>
+                            </div>
+                            <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                                <div className="bg-emerald-500 h-2 rounded-full transition-all duration-500" style={{ width: count > 0 ? `${(avail / count) * 100}%` : '0%' }}></div>
+                            </div>
+                        </div>
+
+                        <button className={`w-full py-2.5 rounded-xl border-2 font-bold text-sm transition-colors ${isCodes ? 'border-amber-100 text-amber-700 group-hover:bg-amber-50' : 'border-indigo-100 text-indigo-700 group-hover:bg-indigo-50'}`}>
+                            الدخول للسجل <i className="fa-solid fa-arrow-left mr-1"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
+        );
+    };
 
-            {/* ===== OVERVIEW or DETAIL ===== */}
+    return (
+        <div className="space-y-6 animate-fade-in pb-24 font-sans text-slate-800">
+
             {!selectedSection ? (
                 <>
+                    {/* ============ OVERVIEW ============ */}
+                    {/* Global Stats */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-gradient-to-br from-purple-600 to-indigo-700 rounded-2xl p-5 text-white shadow-lg relative overflow-hidden">
+                            <div className="absolute -left-4 -bottom-4 text-7xl opacity-10"><i className="fa-solid fa-boxes-stacked"></i></div>
+                            <p className="text-purple-200 text-xs font-bold mb-1">إجمالي المخزون</p>
+                            <h3 className="text-3xl font-extrabold">{globalStats.total}</h3>
+                        </div>
+                        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-1.5 h-full bg-emerald-500"></div>
+                            <p className="text-slate-500 text-xs font-bold mb-1 flex items-center gap-1"><i className="fa-solid fa-check-circle text-emerald-500 text-[10px]"></i> متاح للسحب</p>
+                            <h3 className="text-3xl font-extrabold text-emerald-600">{globalStats.available}</h3>
+                        </div>
+                        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-1.5 h-full bg-orange-500"></div>
+                            <p className="text-slate-500 text-xs font-bold mb-1 flex items-center gap-1"><i className="fa-solid fa-circle-dot text-orange-500 text-[10px]"></i> مستخدم</p>
+                            <h3 className="text-3xl font-extrabold text-orange-600">{globalStats.used}</h3>
+                        </div>
+                        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-1.5 h-full bg-slate-400"></div>
+                            <p className="text-slate-500 text-xs font-bold mb-1 flex items-center gap-1"><i className="fa-solid fa-circle-check text-slate-400 text-[10px]"></i> مكتمل</p>
+                            <h3 className="text-3xl font-extrabold text-slate-400">{globalStats.full}</h3>
+                        </div>
+                    </div>
+
+                    {/* Quick Pull Bar */}
+                    {sections.length > 0 && (
+                        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl p-5 shadow-lg">
+                            <div className="flex items-center gap-2 text-white mb-3">
+                                <i className="fa-solid fa-bolt text-lg"></i>
+                                <h3 className="text-lg font-extrabold">سحب سريع</h3>
+                                <span className="text-emerald-200 text-xs font-medium mr-2">اسحب من أي سجل بدون ما تدخله</span>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {sections.map(sec => {
+                                    const avail = sectionAvailable[sec.name] || 0;
+                                    const isCodes = sec.type === 'codes';
+                                    return (
+                                        <button key={sec.id} onClick={() => handlePullNext(sec.name)}
+                                            disabled={avail === 0}
+                                            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all border ${avail > 0
+                                                ? 'bg-white/15 text-white border-white/20 hover:bg-white/25 active:scale-95'
+                                                : 'bg-white/5 text-white/30 border-white/10 cursor-not-allowed'}`}>
+                                            <i className={`fa-solid ${isCodes ? 'fa-key' : 'fa-user-shield'} text-xs`}></i>
+                                            <span>{sec.name}</span>
+                                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-black ${avail > 0 ? 'bg-white/20' : 'bg-white/5'}`}>{avail}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ===== QUICK LINKS ===== */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <button onClick={() => setLinksExpanded(!linksExpanded)} className="w-full p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-violet-50 text-violet-600 rounded-xl flex items-center justify-center"><i className="fa-solid fa-link text-lg"></i></div>
+                                <div className="text-right">
+                                    <h3 className="text-base font-extrabold text-slate-800">الروابط السريعة</h3>
+                                    <p className="text-[10px] text-slate-400 font-medium">{quickLinks.length} رابط محفوظ</p>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <span onClick={(e) => { e.stopPropagation(); setShowLinkModal(true); }} className="w-8 h-8 flex items-center justify-center bg-violet-100 text-violet-600 rounded-lg hover:bg-violet-200 transition">
+                                    <i className="fa-solid fa-plus text-xs"></i>
+                                </span>
+                                <i className={`fa-solid fa-chevron-down text-slate-400 text-xs transition-transform ${linksExpanded ? 'rotate-180' : ''}`}></i>
+                            </div>
+                        </button>
+
+                        {linksExpanded && (
+                            <div className="px-4 pb-4">
+                                {quickLinks.length === 0 ? (
+                                    <div className="text-center py-6 text-slate-400">
+                                        <i className="fa-solid fa-link-slash text-2xl mb-2 opacity-30 block"></i>
+                                        <p className="text-sm font-bold">لا توجد روابط محفوظة</p>
+                                        <button onClick={() => setShowLinkModal(true)} className="mt-2 text-violet-600 text-xs font-bold hover:underline">إضافة أول رابط +</button>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                                        {quickLinks.map(link => (
+                                            <div key={link.id} className="group flex items-center gap-2 bg-slate-50 hover:bg-violet-50 rounded-xl p-3 border border-slate-100 hover:border-violet-200 transition-all">
+                                                <div className="w-8 h-8 bg-violet-100 text-violet-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                                                    <i className="fa-solid fa-globe text-xs"></i>
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm font-bold text-slate-700 truncate">{link.label}</p>
+                                                    <p className="text-[10px] text-slate-400 font-mono truncate dir-ltr text-left">{link.url}</p>
+                                                </div>
+                                                <div className="flex items-center gap-1 flex-shrink-0">
+                                                    <button onClick={() => copyToClipboard(link.url, `link-${link.id}`)} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-violet-600 hover:bg-violet-100 transition" title="نسخ الرابط">
+                                                        <i className={`fa-solid ${copiedId === `link-${link.id}` ? 'fa-check text-emerald-500' : 'fa-copy'} text-xs`}></i>
+                                                    </button>
+                                                    <a href={link.url} target="_blank" rel="noopener noreferrer" className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition" title="فتح الرابط">
+                                                        <i className="fa-solid fa-arrow-up-right-from-square text-xs"></i>
+                                                    </a>
+                                                    <button onClick={() => deleteLink(link.id)} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition opacity-0 group-hover:opacity-100" title="حذف">
+                                                        <i className="fa-solid fa-trash text-[10px]"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Header + Create */}
                     <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
-                        <div className="text-xl font-black text-slate-800 flex items-center gap-2"><i className="fa-solid fa-layer-group text-indigo-600"></i> أقسام المخزون</div>
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><i className="fa-solid fa-layer-group text-lg"></i></div>
+                            <div>
+                                <h2 className="text-xl font-black text-slate-800">أقسام المخزون</h2>
+                                <p className="text-xs text-slate-400 font-medium">{globalStats.accountSections} حسابات • {globalStats.codeSections} أكواد</p>
+                            </div>
+                        </div>
                         <button onClick={() => setShowSectionModal(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm px-6 py-2.5 shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 w-full md:w-auto">
                             <i className="fa-solid fa-plus"></i> إنشاء سجل جديد
                         </button>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {sections.map(sec => {
-                            const count = sectionCounts[sec.name] || 0;
-                            const avail = accounts.filter(a => a.productName === sec.name && a.status === 'available').length;
-                            const linkedProds = linkedProductsMap[sec.name] || [];
-                            return (
-                                <div key={sec.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-xl hover:border-indigo-200 hover:-translate-y-1 transition-all cursor-pointer flex flex-col group relative">
-                                    {/* Delete btn - always visible */}
-                                    <button onClick={(e) => { e.stopPropagation(); deleteSection(sec); }} className="absolute top-3 left-3 w-8 h-8 flex items-center justify-center rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition z-10 border border-red-100" title="حذف القسم">
-                                        <i className="fa-solid fa-trash text-xs"></i>
-                                    </button>
-
-                                    <div onClick={() => setSelectedSection(sec.id)} className="flex-1 flex flex-col">
-                                        <div className="flex items-center gap-3 mb-3">
-                                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl group-hover:scale-110 transition-all shadow-sm ${sec.type === 'codes' ? 'bg-amber-50 text-amber-600 group-hover:bg-amber-600 group-hover:text-white' : 'bg-indigo-50 text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white'}`}>
-                                                <i className={`fa-solid ${sec.type === 'codes' ? 'fa-key' : 'fa-user-shield'}`}></i>
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <h4 className="font-extrabold text-lg text-slate-800 truncate">{sec.name}</h4>
-                                                <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${sec.type === 'codes' ? 'bg-amber-50 text-amber-600 border border-amber-200' : 'bg-indigo-50 text-indigo-600 border border-indigo-200'}`}>
-                                                        {sec.type === 'codes' ? 'أكواد' : 'اكونتات'}
-                                                    </span>
-                                                    {linkedProds.length > 0 ? (
-                                                        linkedProds.map(pn => (
-                                                            <span key={pn} className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-purple-50 text-purple-600 border border-purple-200">
-                                                                <i className="fa-solid fa-link text-[8px] ml-0.5"></i> {pn}
-                                                            </span>
-                                                        ))
-                                                    ) : (
-                                                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-50 text-slate-400 border border-slate-200">مستقل</span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <p className="text-sm font-bold text-slate-400 mb-4">{count} عنصر في المخزون</p>
-
-                                        <div className="mt-auto flex flex-col gap-2">
-                                            <div className="flex justify-between items-center text-xs font-bold text-slate-500 bg-slate-50 px-3 py-2 rounded-lg border border-slate-100">
-                                                <span>متاح للبيع:</span>
-                                                <span className="text-emerald-600 text-sm">{avail}</span>
-                                            </div>
-                                            <button className="w-full mt-2 py-2.5 rounded-xl border-2 border-indigo-100 text-indigo-700 font-bold text-sm group-hover:bg-indigo-50 transition-colors">الدخول للسجل <i className="fa-solid fa-arrow-left mr-1"></i></button>
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                        {sections.length === 0 && (
-                            <div className="col-span-full py-16 bg-white rounded-3xl border-2 border-dashed border-slate-200 text-slate-400 flex flex-col items-center">
-                                <i className="fa-solid fa-boxes-stacked text-5xl mb-4 opacity-30"></i>
-                                <p className="font-bold text-lg">المخزون فارغ تماماً</p>
-                                <p className="text-sm mt-1">اضغط "إنشاء سجل جديد" لبدء تنظيم المخزون</p>
+                    {/* ===== ACCOUNTS SECTION ===== */}
+                    {accountSections.length > 0 && (
+                        <div>
+                            <div className="flex items-center gap-2 mb-4">
+                                <div className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center"><i className="fa-solid fa-user-shield text-sm"></i></div>
+                                <h3 className="text-lg font-extrabold text-slate-800">الحسابات</h3>
+                                <span className="text-xs px-2.5 py-0.5 bg-indigo-50 text-indigo-600 rounded-full font-bold border border-indigo-100">{accountSections.length}</span>
                             </div>
-                        )}
-                    </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                                {accountSections.map(sec => <SectionCard key={sec.id} sec={sec} />)}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ===== CODES SECTION ===== */}
+                    {codeSections.length > 0 && (
+                        <div>
+                            <div className="flex items-center gap-2 mb-4">
+                                <div className="w-8 h-8 bg-amber-100 text-amber-600 rounded-lg flex items-center justify-center"><i className="fa-solid fa-key text-sm"></i></div>
+                                <h3 className="text-lg font-extrabold text-slate-800">الأكواد</h3>
+                                <span className="text-xs px-2.5 py-0.5 bg-amber-50 text-amber-600 rounded-full font-bold border border-amber-100">{codeSections.length}</span>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                                {codeSections.map(sec => <SectionCard key={sec.id} sec={sec} />)}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Empty State */}
+                    {sections.length === 0 && (
+                        <div className="col-span-full py-16 bg-white rounded-3xl border-2 border-dashed border-slate-200 text-slate-400 flex flex-col items-center">
+                            <i className="fa-solid fa-boxes-stacked text-5xl mb-4 opacity-30"></i>
+                            <p className="font-bold text-lg">المخزون فارغ تماماً</p>
+                            <p className="text-sm mt-1">اضغط "إنشاء سجل جديد" لبدء تنظيم المخزون</p>
+                        </div>
+                    )}
                 </>
             ) : (
                 <>
-                    {/* Internal View Toolbar */}
+                    {/* ============ DETAIL VIEW ============ */}
+                    {/* Stats for current section */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className={`rounded-2xl p-5 text-white shadow-lg relative overflow-hidden ${isCodesSection ? 'bg-gradient-to-br from-amber-600 to-orange-600' : 'bg-gradient-to-br from-purple-600 to-indigo-700'}`}>
+                            <div className="absolute -left-4 -bottom-4 text-7xl opacity-10"><i className={`fa-solid ${isCodesSection ? 'fa-key' : 'fa-server'}`}></i></div>
+                            <p className="text-white/70 text-xs font-bold mb-1">إجمالي</p>
+                            <h3 className="text-3xl font-extrabold">{accountStats.total}</h3>
+                        </div>
+                        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-1.5 h-full bg-emerald-500"></div>
+                            <p className="text-slate-500 text-xs font-bold mb-1">متاح</p>
+                            <h3 className="text-3xl font-extrabold text-emerald-600">{accountStats.available}</h3>
+                        </div>
+                        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-1.5 h-full bg-orange-500"></div>
+                            <p className="text-slate-500 text-xs font-bold mb-1">مستخدم</p>
+                            <h3 className="text-3xl font-extrabold text-orange-600">{accountStats.used}</h3>
+                        </div>
+                        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-1.5 h-full bg-slate-400"></div>
+                            <p className="text-slate-500 text-xs font-bold mb-1">مكتمل</p>
+                            <h3 className="text-3xl font-extrabold text-slate-400">{accountStats.full}</h3>
+                        </div>
+                    </div>
+
+                    {/* Toolbar */}
                     <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row gap-4 items-center justify-between sticky top-2 z-30 bg-white/95 backdrop-blur-md">
                         <div className="flex items-center gap-3 w-full md:w-auto overflow-hidden">
                             <button onClick={() => { setSelectedSection(null); setSearchTerm(''); setFilterStatus('all'); setVisibleCount(20); }} className="w-10 h-10 flex-shrink-0 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition-colors">
@@ -332,8 +547,8 @@ export default function Accounts() {
                             </button>
                             <div className="min-w-0">
                                 <h2 className="text-lg font-black text-slate-800 truncate">{currentSection?.name}</h2>
-                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${currentSection?.type === 'codes' ? 'bg-amber-50 text-amber-600' : 'bg-indigo-50 text-indigo-600'}`}>
-                                    {currentSection?.type === 'codes' ? 'أكواد' : 'اكونتات'}
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isCodesSection ? 'bg-amber-50 text-amber-600' : 'bg-indigo-50 text-indigo-600'}`}>
+                                    {isCodesSection ? 'أكواد' : 'حسابات'}
                                 </span>
                             </div>
                         </div>
@@ -342,10 +557,10 @@ export default function Accounts() {
                             <input type="text" className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-sm font-semibold rounded-xl pr-10 p-3 outline-none focus:bg-white focus:border-indigo-400 transition-all placeholder-slate-400" placeholder="بحث بالبيانات..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
                         </div>
                         <div className="flex gap-3 w-full md:w-auto">
-                            <button onClick={handlePullNext} className="bg-emerald-600 hover:bg-emerald-700 text-white w-full md:w-auto justify-center font-bold rounded-xl text-sm px-6 py-2.5 shadow-lg shadow-emerald-200 transition-all flex items-center gap-2">
+                            <button onClick={() => handlePullNext()} className="bg-emerald-600 hover:bg-emerald-700 text-white w-full md:w-auto justify-center font-bold rounded-xl text-sm px-6 py-2.5 shadow-lg shadow-emerald-200 transition-all flex items-center gap-2">
                                 <i className="fa-solid fa-bolt"></i> سحب التالي
                             </button>
-                            <button onClick={() => setShowAddModal(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white w-full md:w-auto justify-center font-bold rounded-xl text-sm px-6 py-2.5 shadow-lg shadow-indigo-200 transition-all flex items-center gap-2">
+                            <button onClick={() => setShowAddModal(true)} className={`w-full md:w-auto justify-center font-bold rounded-xl text-sm px-6 py-2.5 shadow-lg transition-all flex items-center gap-2 text-white ${isCodesSection ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}>
                                 <i className="fa-solid fa-plus"></i> إضافة {isCodesSection ? 'أكواد' : 'بيانات'}
                             </button>
                         </div>
@@ -354,8 +569,11 @@ export default function Accounts() {
                     {/* Filters */}
                     <div className="flex flex-wrap gap-3 items-center">
                         <div className="flex bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm overflow-x-auto w-full md:w-auto scrollbar-hide">
-                            {[{ id: 'all', label: 'الكل' }, { id: 'available', label: 'متاح' }, { id: 'used', label: 'مستخدم' }, { id: 'completed', label: 'مكتمل' }, { id: 'damaged', label: 'تالف' }].map(f => (
-                                <button key={f.id} onClick={() => setFilterStatus(f.id)} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-1 md:flex-none ${filterStatus === f.id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>{f.label}</button>
+                            {[{ id: 'all', label: 'الكل', count: accountStats.total }, { id: 'available', label: 'متاح', count: accountStats.available }, { id: 'used', label: 'مستخدم', count: accountStats.used }, { id: 'completed', label: 'مكتمل', count: accountStats.full }, { id: 'damaged', label: 'تالف' }].map(f => (
+                                <button key={f.id} onClick={() => setFilterStatus(f.id)} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-1 md:flex-none flex items-center justify-center gap-1.5 ${filterStatus === f.id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>
+                                    {f.label}
+                                    {f.count !== undefined && <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${filterStatus === f.id ? 'bg-white/20' : 'bg-slate-100'}`}>{f.count}</span>}
+                                </button>
                             ))}
                         </div>
                     </div>
@@ -462,7 +680,7 @@ export default function Accounts() {
                                     <label className="flex flex-col items-center gap-2 p-5 rounded-2xl border-2 cursor-pointer transition-all has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50 border-slate-200 hover:border-indigo-200 text-center">
                                         <input type="radio" name="sectionType" value="accounts" defaultChecked className="hidden" />
                                         <div className="w-14 h-14 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center text-2xl"><i className="fa-solid fa-user-shield"></i></div>
-                                        <span className="text-sm font-extrabold text-slate-700">اكونتات</span>
+                                        <span className="text-sm font-extrabold text-slate-700">حسابات</span>
                                         <span className="text-[10px] text-slate-400 font-medium">إيميل + باسورد + 2FA</span>
                                     </label>
                                     <label className="flex flex-col items-center gap-2 p-5 rounded-2xl border-2 cursor-pointer transition-all has-[:checked]:border-amber-500 has-[:checked]:bg-amber-50 border-slate-200 hover:border-amber-200 text-center">
@@ -650,7 +868,7 @@ export default function Accounts() {
                                     <h3 className="text-xl font-bold">المخزون فارغ!</h3>
                                 </div>
                                 <div className="p-8 text-center">
-                                    <p className="text-slate-600 font-bold mb-2">لا توجد عناصر متاحة للسحب في سجل <span className="text-indigo-700">{currentSection?.name}</span></p>
+                                    <p className="text-slate-600 font-bold mb-2">لا توجد عناصر متاحة للسحب في سجل <span className="text-indigo-700">{pulledResult.sectionName || currentSection?.name}</span></p>
                                     <button onClick={() => setPulledResult(null)} className="mt-6 w-full bg-slate-800 text-white py-3.5 rounded-xl font-bold hover:bg-slate-900 shadow-lg shadow-slate-200 transition-all">حسناً</button>
                                 </div>
                             </>
@@ -659,7 +877,7 @@ export default function Accounts() {
                                 <div className="p-6 bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-center">
                                     <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3"><i className="fa-solid fa-bolt text-3xl"></i></div>
                                     <h3 className="text-xl font-bold">تم السحب بنجاح!</h3>
-                                    <p className="text-emerald-100 text-sm mt-1">تم نسخ البيانات تلقائياً</p>
+                                    <p className="text-emerald-100 text-sm mt-1">تم نسخ البيانات تلقائياً • {pulledResult.sectionName}</p>
                                 </div>
                                 <div className="p-8 space-y-4">
                                     <div className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
@@ -681,7 +899,7 @@ export default function Accounts() {
                                         </div>
                                     )}
                                     <div className="flex flex-col gap-1.5">
-                                        <label className="text-xs font-black text-slate-500 uppercase tracking-wide">{isCodesSection ? 'الكود' : 'البيانات'}</label>
+                                        <label className="text-xs font-black text-slate-500 uppercase tracking-wide">البيانات</label>
                                         <div className="flex items-center">
                                             <code className="text-sm font-mono font-bold text-slate-800 bg-slate-50 px-4 py-3 rounded-r-xl border border-r-0 border-slate-200 flex-1 truncate select-all dir-ltr text-left">{pulledResult.email}</code>
                                             <button onClick={() => copyToClipboard(pulledResult.email, 'pulled-email')} className="h-[46px] w-[50px] flex items-center justify-center bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100 rounded-l-xl transition">
@@ -721,13 +939,38 @@ export default function Accounts() {
                                     </button>
                                     <div className="flex gap-3 pt-2">
                                         <button onClick={() => setPulledResult(null)} className="flex-1 py-3 rounded-xl font-bold text-slate-600 bg-white border-2 border-slate-200 hover:bg-slate-50 transition">إغلاق</button>
-                                        <button onClick={() => { setPulledResult(null); handlePullNext(); }} className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2">
+                                        <button onClick={() => { const name = pulledResult.sectionName; setPulledResult(null); handlePullNext(name); }} className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2">
                                             <i className="fa-solid fa-bolt"></i> سحب التالي
                                         </button>
                                     </div>
                                 </div>
                             </>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* ===== ADD LINK MODAL ===== */}
+            {showLinkModal && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
+                    <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-scale-in">
+                        <div className="p-6 bg-gradient-to-r from-violet-600 to-purple-600 text-white flex justify-between items-center">
+                            <h3 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-link"></i> إضافة رابط سريع</h3>
+                            <button onClick={() => setShowLinkModal(false)} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition"><i className="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+                        <form onSubmit={handleAddLink} className="p-8 space-y-5">
+                            <div>
+                                <label className="block text-sm font-extrabold text-slate-800 mb-2">اسم الرابط</label>
+                                <input name="linkLabel" type="text" className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-violet-100 focus:border-violet-600 outline-none transition-all" placeholder="مثال: 2FA Code أو Dashboard..." required />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-extrabold text-slate-800 mb-2">الرابط (URL)</label>
+                                <input name="linkUrl" type="text" className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-violet-100 focus:border-violet-600 outline-none transition-all font-mono dir-ltr text-left" placeholder="https://example.com/..." required />
+                            </div>
+                            <button type="submit" className="w-full bg-violet-600 text-white py-3.5 rounded-xl font-bold hover:bg-violet-700 shadow-lg shadow-violet-200 transition-all flex items-center justify-center gap-2">
+                                <i className="fa-solid fa-check"></i> حفظ الرابط
+                            </button>
+                        </form>
                     </div>
                 </div>
             )}
