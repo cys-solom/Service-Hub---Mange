@@ -117,11 +117,20 @@ export default function Accounts() {
             if (isBulkAdd) {
                 const bulkData = fd.get('bulkData')?.trim();
                 if (!bulkData) return;
+                const twoFABaseUrl = 'https://www.servicehub-mail.cloud/2fa-code/';
                 const rows = bulkData.split('\n').map(l => l.trim()).filter(l => l).map(line => {
-                    let email = line, password = '';
-                    if (line.includes(':')) [email, password] = line.split(':');
-                    else if (line.includes('|')) [email, password] = line.split('|');
-                    return { email: email.trim(), password: password ? password.trim() : '', twoFA: '', productName, allowed_uses: isWorkspace ? workspaceMembers : allowedUses, createdBy: user?.username || 'Admin', isWorkspace, workspaceMembers };
+                    let email = line, password = '', twoFA = '';
+                    // Support formats: email:pass, email|pass, email|pass|2fa, email:pass:2fa
+                    const separator = line.includes('|') ? '|' : ':';
+                    const parts = line.split(separator).map(p => p.trim());
+                    email = parts[0] || '';
+                    password = parts[1] || '';
+                    if (parts[2]) {
+                        // Auto-prefix 2FA with URL if it's just a code
+                        const rawCode = parts[2].trim();
+                        twoFA = rawCode.startsWith('http') ? rawCode : twoFABaseUrl + rawCode;
+                    }
+                    return { email, password, twoFA, productName, allowed_uses: isWorkspace ? workspaceMembers : allowedUses, createdBy: user?.username || 'Admin', isWorkspace, workspaceMembers };
                 });
                 await accountsAPI.createBulk(rows);
             } else {
@@ -494,7 +503,19 @@ export default function Accounts() {
                             {isBulkAdd ? (
                                 <div>
                                     <label className="block text-sm font-extrabold text-slate-800 mb-2">{isCodesSection ? 'الأكواد (كل كود في سطر)' : 'الحسابات (كل عنصر في سطر)'}</label>
-                                    <textarea name="bulkData" rows="6" className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all font-mono dir-ltr text-left resize-none" placeholder={isCodesSection ? 'XXXX-YYYY-ZZZZ\nAAAA-BBBB-CCCC' : 'email@domain.com:password\nemail2@domain.com:pass2'} required></textarea>
+                                    <textarea name="bulkData" rows="6" className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all font-mono dir-ltr text-left resize-none" placeholder={isCodesSection ? 'XXXX-YYYY-ZZZZ\nAAAA-BBBB-CCCC' : 'email@domain.com | password | 2fa_code\nemail2@domain.com | pass2 | 2fa_code2'} required></textarea>
+                                    {!isCodesSection && (
+                                        <div className="mt-2 bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                                            <p className="text-[11px] text-indigo-700 font-bold mb-1"><i className="fa-solid fa-info-circle ml-1"></i> الفورمات المدعومة:</p>
+                                            <ul className="text-[10px] text-indigo-600 font-mono space-y-0.5 list-disc list-inside">
+                                                <li>email | password | 2fa_code</li>
+                                                <li>email:password:2fa_code</li>
+                                                <li>email | password</li>
+                                                <li>email:password</li>
+                                            </ul>
+                                            <p className="text-[10px] text-indigo-500 mt-1.5 font-medium">كود الـ 2FA هيتحول تلقائياً للينك: <span className="font-bold">servicehub-mail.cloud/2fa-code/</span></p>
+                                        </div>
+                                    )}
                                 </div>
                             ) : (
                                 <>
@@ -647,6 +668,18 @@ export default function Accounts() {
                                             {pulledResult.status === 'completed' ? '✅ مكتمل' : `📊 ${pulledResult.current_uses} / ${pulledResult.allowed_uses === -1 ? '∞' : pulledResult.allowed_uses}`}
                                         </span>
                                     </div>
+                                    {pulledResult.is_workspace && (
+                                        <div className="bg-cyan-50 p-3 rounded-xl border border-cyan-200 flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <i className="fa-solid fa-users-rectangle text-cyan-600"></i>
+                                                <span className="text-sm font-bold text-cyan-700">Workspace</span>
+                                            </div>
+                                            <div className="text-left">
+                                                <span className="text-sm font-extrabold text-cyan-800">{pulledResult.current_uses} / {pulledResult.workspace_members || pulledResult.allowed_uses}</span>
+                                                <span className="text-xs text-cyan-500 block">متبقي {(pulledResult.workspace_members || pulledResult.allowed_uses) - pulledResult.current_uses} شخص</span>
+                                            </div>
+                                        </div>
+                                    )}
                                     <div className="flex flex-col gap-1.5">
                                         <label className="text-xs font-black text-slate-500 uppercase tracking-wide">{isCodesSection ? 'الكود' : 'البيانات'}</label>
                                         <div className="flex items-center">
@@ -667,7 +700,21 @@ export default function Accounts() {
                                             </div>
                                         </div>
                                     )}
-                                    <button onClick={() => { let t = pulledResult.email; if (pulledResult.password) t += `\n${pulledResult.password}`; if (pulledResult.twoFA) t += `\n${pulledResult.twoFA}`; copyToClipboard(t, 'pulled-all'); }}
+                                    {(pulledResult.twoFA || pulledResult.two_fa) && (
+                                        <div className="flex flex-col gap-1.5">
+                                            <label className="text-xs font-black text-purple-500 uppercase tracking-wide">2FA Link</label>
+                                            <div className="flex items-center">
+                                                <code className="text-sm font-mono font-bold text-purple-700 bg-purple-50 px-4 py-3 rounded-r-xl border border-r-0 border-purple-200 flex-1 truncate select-all dir-ltr text-left">{pulledResult.twoFA || pulledResult.two_fa}</code>
+                                                <button onClick={() => copyToClipboard(pulledResult.twoFA || pulledResult.two_fa, 'pulled-2fa')} className="h-[46px] w-[50px] flex items-center justify-center bg-purple-50 text-purple-600 hover:bg-purple-100 border border-purple-100 rounded-l-xl transition">
+                                                    <i className={`fa-solid ${copiedId === 'pulled-2fa' ? 'fa-check text-emerald-500' : 'fa-copy'}`}></i>
+                                                </button>
+                                            </div>
+                                            <a href={pulledResult.twoFA || pulledResult.two_fa} target="_blank" rel="noopener noreferrer" className="text-xs text-purple-500 font-bold flex items-center gap-1 hover:text-purple-700 transition">
+                                                <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i> فتح رابط الـ 2FA
+                                            </a>
+                                        </div>
+                                    )}
+                                    <button onClick={() => { let t = pulledResult.email; if (pulledResult.password) t += `\n${pulledResult.password}`; if (pulledResult.twoFA || pulledResult.two_fa) t += `\n${pulledResult.twoFA || pulledResult.two_fa}`; copyToClipboard(t, 'pulled-all'); }}
                                         className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 border-2 ${copiedId === 'pulled-all' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}>
                                         <i className={`fa-solid ${copiedId === 'pulled-all' ? 'fa-check' : 'fa-clipboard'}`}></i>
                                         {copiedId === 'pulled-all' ? 'تم النسخ ✓' : 'نسخ كل البيانات'}
