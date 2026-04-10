@@ -824,6 +824,7 @@ export const employeesAPI = {
             absenceDeductionPerDay: e.absence_deduction_per_day,
             isActive: e.is_active,
             joinDate: e.join_date,
+            payDay: e.pay_day || 'thursday',
         }));
     },
 
@@ -840,29 +841,77 @@ export const employeesAPI = {
             notes: emp.notes || '',
             is_active: emp.isActive !== false,
             join_date: emp.joinDate || new Date().toISOString().split('T')[0],
+            pay_day: emp.payDay || 'thursday',
         }).select().single();
         if (error) throw error;
         return data;
     },
 
     async update(id, emp) {
-        const { error } = await supabase.from('employees').update({
-            name: emp.name,
-            phone: emp.phone || '',
-            role: emp.role || '',
-            base_salary: emp.baseSalary || 0,
-            bonus: emp.bonus || 0,
-            deductions: emp.deductions || 0,
-            absence_days: emp.absenceDays || 0,
-            absence_deduction_per_day: emp.absenceDeductionPerDay || 0,
-            notes: emp.notes || '',
-            is_active: emp.isActive !== false,
-        }).eq('id', id);
+        const updates = {};
+        if (emp.name !== undefined) updates.name = emp.name;
+        if (emp.phone !== undefined) updates.phone = emp.phone;
+        if (emp.role !== undefined) updates.role = emp.role;
+        if (emp.baseSalary !== undefined) updates.base_salary = emp.baseSalary;
+        if (emp.bonus !== undefined) updates.bonus = emp.bonus;
+        if (emp.deductions !== undefined) updates.deductions = emp.deductions;
+        if (emp.absenceDays !== undefined) updates.absence_days = emp.absenceDays;
+        if (emp.absenceDeductionPerDay !== undefined) updates.absence_deduction_per_day = emp.absenceDeductionPerDay;
+        if (emp.notes !== undefined) updates.notes = emp.notes;
+        if (emp.isActive !== undefined) updates.is_active = emp.isActive;
+        if (emp.payDay !== undefined) updates.pay_day = emp.payDay;
+        const { error } = await supabase.from('employees').update(updates).eq('id', id);
         if (error) throw error;
     },
 
     async delete(id) {
         const { error } = await supabase.from('employees').delete().eq('id', id);
+        if (error) throw error;
+    },
+};
+
+// ============ SALARY PAYMENTS ============
+export const salaryPaymentsAPI = {
+    async getAll() {
+        const { data } = await supabase.from('salary_payments').select('*').order('payment_date', { ascending: false });
+        return (data || []).map(p => ({ ...p, employeeId: p.employee_id, paymentDate: p.payment_date }));
+    },
+    async getByEmployee(employeeId) {
+        const { data } = await supabase.from('salary_payments').select('*').eq('employee_id', employeeId).order('payment_date', { ascending: false });
+        return (data || []).map(p => ({ ...p, employeeId: p.employee_id, paymentDate: p.payment_date }));
+    },
+    async create(payment) {
+        const { data, error } = await supabase.from('salary_payments').insert({
+            employee_id: payment.employeeId, amount: payment.amount,
+            payment_date: payment.paymentDate || new Date().toISOString().split('T')[0],
+            notes: payment.notes || '',
+        }).select().single();
+        if (error) throw error;
+        return data;
+    },
+    async delete(id) {
+        const { error } = await supabase.from('salary_payments').delete().eq('id', id);
+        if (error) throw error;
+    },
+};
+
+// ============ EMPLOYEE ACTIONS ============
+export const employeeActionsAPI = {
+    async getByEmployee(employeeId) {
+        const { data } = await supabase.from('employee_actions').select('*').eq('employee_id', employeeId).order('action_date', { ascending: false });
+        return (data || []).map(a => ({ ...a, employeeId: a.employee_id, actionType: a.action_type, actionDate: a.action_date }));
+    },
+    async create(action) {
+        const { data, error } = await supabase.from('employee_actions').insert({
+            employee_id: action.employeeId, action_type: action.actionType,
+            amount: action.amount || 0, description: action.description || '',
+            action_date: action.actionDate || new Date().toISOString().split('T')[0],
+        }).select().single();
+        if (error) throw error;
+        return data;
+    },
+    async delete(id) {
+        const { error } = await supabase.from('employee_actions').delete().eq('id', id);
         if (error) throw error;
     },
 };
