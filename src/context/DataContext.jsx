@@ -40,6 +40,9 @@ const REALTIME_TABLES = [
     'inventory_sections',
     'problems',
     'attendance',
+    'employees',
+    'salary_payments',
+    'employee_actions',
 ];
 
 export const DataProvider = ({ children }) => {

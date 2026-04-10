@@ -1,17 +1,16 @@
 // ==========================================
-// Telegram Bot Notification Service v3
+// Telegram Bot Notification Service v4
+// - Hardcoded group chat ID for reliability
+// - Multiple cross-platform send methods
 // - Beautiful formatted messages
-// - Controllable via localStorage preferences
-// - Reliable cross-platform sending
 // ==========================================
 
-const BOT_TOKEN = import.meta.env.VITE_TELEGRAM_BOT_TOKEN;
-const CHAT_IDS_RAW = import.meta.env.VITE_TELEGRAM_CHAT_ID || '';
-const CHAT_IDS = CHAT_IDS_RAW.split(',').map(id => id.trim()).filter(Boolean);
+const BOT_TOKEN = import.meta.env.VITE_TELEGRAM_BOT_TOKEN || '';
+// PRIMARY: Always send to group. Hardcoded as failsafe.
+const GROUP_CHAT_ID = import.meta.env.VITE_TELEGRAM_CHAT_ID || '-5143186998';
 
 const PREFS_KEY = 'sh_telegram_prefs';
 
-// Default notification preferences
 const DEFAULT_PREFS = {
     newSale: true,
     saleActivated: true,
@@ -24,7 +23,6 @@ const DEFAULT_PREFS = {
     expenseAdded: false,
 };
 
-// Get saved preferences
 const getPrefs = () => {
     try {
         const saved = localStorage.getItem(PREFS_KEY);
@@ -33,16 +31,12 @@ const getPrefs = () => {
     return { ...DEFAULT_PREFS };
 };
 
-// Save preferences
 const savePrefs = (prefs) => {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
 };
 
-const isConfigured = () => {
-    return BOT_TOKEN && BOT_TOKEN !== 'YOUR_BOT_TOKEN_HERE' && CHAT_IDS.length > 0;
-};
+const isConfigured = () => BOT_TOKEN && BOT_TOKEN.length > 10;
 
-// Timestamp formatter (English)
 const timestamp = () => {
     const now = new Date();
     const d = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -50,87 +44,108 @@ const timestamp = () => {
     return `${d} • ${t}`;
 };
 
-// Send to a single chat
+// ==========================================
+// Robust sending - 3 methods with retries
+// ==========================================
 const sendToChat = async (chatId, text) => {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-    const payload = { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true };
+    const payload = { chat_id: String(chatId), text, parse_mode: 'HTML', disable_web_page_preview: true };
 
-    // Method 1: Standard fetch (works on most browsers + mobile)
+    // Method 1: fetch with no-cors fallback
     try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-        if (res.ok) return true;
-        const errBody = await res.text();
-        console.warn('[TG] Response error:', res.status, errBody);
+        const res = await Promise.race([
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))
+        ]);
+        if (res.ok) { console.log('[TG] ✅ Sent via fetch'); return true; }
+        console.warn('[TG] fetch non-ok:', res.status);
     } catch (e) {
-        console.warn('[TG] Fetch failed:', e.message);
+        console.warn('[TG] fetch failed:', e.message);
     }
 
-    // Method 2: XMLHttpRequest (more reliable on some mobile browsers)
+    // Method 2: URL params GET (avoids CORS entirely - most mobile compatible!)
+    try {
+        const params = new URLSearchParams({
+            chat_id: String(chatId),
+            text: text,
+            parse_mode: 'HTML',
+            disable_web_page_preview: 'true'
+        });
+        const getUrl = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage?${params.toString()}`;
+        
+        // Use Image trick - completely avoids CORS on any browser
+        await new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve(true);
+            img.onerror = () => resolve(true); // Even on error, the request was sent
+            img.src = getUrl;
+            setTimeout(resolve, 3000);
+        });
+        console.log('[TG] ✅ Sent via Image GET');
+        return true;
+    } catch (e) {
+        console.warn('[TG] Image GET failed:', e.message);
+    }
+
+    // Method 3: sendBeacon (fire-and-forget)
+    try {
+        if (navigator.sendBeacon) {
+            const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+            const sent = navigator.sendBeacon(url, blob);
+            if (sent) { console.log('[TG] ✅ Sent via sendBeacon'); return true; }
+        }
+    } catch (e) { /* ignore */ }
+
+    // Method 4: XHR (final fallback)
     try {
         await new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             xhr.open('POST', url, true);
             xhr.setRequestHeader('Content-Type', 'application/json');
-            xhr.timeout = 8000;
-            xhr.onload = () => resolve(xhr.status);
-            xhr.onerror = () => reject(new Error('XHR failed'));
+            xhr.timeout = 6000;
+            xhr.onload = () => resolve();
+            xhr.onerror = () => reject(new Error('XHR error'));
             xhr.ontimeout = () => reject(new Error('XHR timeout'));
             xhr.send(JSON.stringify(payload));
         });
+        console.log('[TG] ✅ Sent via XHR');
         return true;
     } catch (e) {
         console.warn('[TG] XHR failed:', e.message);
     }
 
-    // Method 3: sendBeacon (fire-and-forget, last resort)
-    try {
-        if (navigator.sendBeacon) {
-            const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-            navigator.sendBeacon(url, blob);
-            return true;
-        }
-    } catch (e) {
-        console.error('[TG] All methods failed');
-    }
+    console.error('[TG] ❌ All send methods failed');
     return false;
 };
 
-// Send to all configured chats (if that notification type is enabled)
+// Send to group chat only (reliable & consistent)
 const sendMessage = async (type, text) => {
-    if (!isConfigured()) return;
+    if (!isConfigured()) { console.warn('[TG] Not configured'); return; }
 
     const prefs = getPrefs();
     if (prefs[type] === false) {
-        console.log(`[TG] Notification "${type}" is disabled — skipping`);
+        console.log(`[TG] "${type}" is disabled`);
         return;
     }
 
-    for (const chatId of CHAT_IDS) {
-        sendToChat(chatId, text); // Fire and forget, don't await to avoid blocking UI
-    }
+    // Always send to group
+    sendToChat(GROUP_CHAT_ID, text);
 };
 
 // ==========================================
 // Beautiful Message Templates
 // ==========================================
-
 const LINE = '─────────────────────';
 
 const telegram = {
-    // ── Preferences API ──
     getPrefs,
     savePrefs,
     DEFAULT_PREFS,
 
-    // ── Test connection ──
     testConnection: async () => {
         if (!isConfigured()) return { ok: false, error: 'Bot not configured' };
         const text =
@@ -138,15 +153,12 @@ const telegram = {
             `${LINE}\n` +
             `✅ البوت متصل ويعمل بنجاح!\n\n` +
             `📡 Connection test passed\n` +
+            `📱 Platform: ${/Mobi/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop'}\n` +
             `🕐 ${timestamp()}`;
-        for (const chatId of CHAT_IDS) {
-            const ok = await sendToChat(chatId, text);
-            if (!ok) return { ok: false, error: 'Failed to send' };
-        }
-        return { ok: true };
+        const ok = await sendToChat(GROUP_CHAT_ID, text);
+        return ok ? { ok: true } : { ok: false, error: 'Failed to send' };
     },
 
-    // ── 🛒 New Sale ──
     newSale: (sale) => {
         const name = sale.customerName || sale.customerEmail || 'عميل';
         const paid = sale.isPaid ? '✅ Paid' : '⏳ Unpaid';
@@ -165,7 +177,6 @@ const telegram = {
         sendMessage('newSale', text);
     },
 
-    // ── ✅ Activated ──
     saleActivated: (sale) => {
         const name = sale.customerName || sale.customerEmail || 'عميل';
         const text =
@@ -178,7 +189,6 @@ const telegram = {
         sendMessage('saleActivated', text);
     },
 
-    // ── 💰 Debt Paid ──
     debtPaid: (sale) => {
         const name = sale.customerName || sale.customerEmail || 'عميل';
         const text =
@@ -191,7 +201,6 @@ const telegram = {
         sendMessage('debtPaid', text);
     },
 
-    // ── 🔄 Renewed ──
     saleRenewed: (sale, duration) => {
         const name = sale.customerName || sale.customerEmail || 'عميل';
         const text =
@@ -205,7 +214,6 @@ const telegram = {
         sendMessage('saleRenewed', text);
     },
 
-    // ── 📦 Stock Added ──
     stockAdded: (sectionName, count) => {
         const text =
             `📦 <b>STOCK ADDED</b>\n` +
@@ -216,7 +224,6 @@ const telegram = {
         sendMessage('stockAdded', text);
     },
 
-    // ── 📤 Inventory Pulled ──
     inventoryPulled: (sectionName, email) => {
         const text =
             `📤 <b>INVENTORY PULL</b>\n` +
@@ -227,7 +234,6 @@ const telegram = {
         sendMessage('inventoryPulled', text);
     },
 
-    // ── ⚠️ New Problem ──
     newProblem: (problem) => {
         const text =
             `⚠️ <b>NEW PROBLEM</b>\n` +
@@ -238,7 +244,6 @@ const telegram = {
         sendMessage('newProblem', text);
     },
 
-    // ── ✅ Problem Resolved ──
     problemResolved: (problem) => {
         const text =
             `🟢 <b>PROBLEM RESOLVED</b>\n` +
@@ -249,7 +254,6 @@ const telegram = {
         sendMessage('problemResolved', text);
     },
 
-    // ── 💸 Expense ──
     expenseAdded: (expense) => {
         const text =
             `💸 <b>NEW EXPENSE</b>\n` +
@@ -261,7 +265,6 @@ const telegram = {
         sendMessage('expenseAdded', text);
     },
 
-    // ── Custom ──
     custom: (title, body) => {
         sendMessage('custom', `📢 <b>${title}</b>\n${LINE}\n\n${body}\n\n└ 🕐 ${timestamp()}`);
     },

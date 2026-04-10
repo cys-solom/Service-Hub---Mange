@@ -1,5 +1,6 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { employeesAPI, salaryPaymentsAPI, employeeActionsAPI } from '../services/api';
+import { supabase } from '../lib/supabase';
 
 const DAY_NAMES = { saturday: 'السبت', sunday: 'الأحد', monday: 'الاثنين', tuesday: 'الثلاثاء', wednesday: 'الأربعاء', thursday: 'الخميس', friday: 'الجمعة' };
 const DAY_EN = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
@@ -18,6 +19,7 @@ export default function Employees() {
     const [selectedEmp, setSelectedEmp] = useState(null);
     const [empPayments, setEmpPayments] = useState([]);
     const [empActions, setEmpActions] = useState([]);
+    const [confirmDelete, setConfirmDelete] = useState(null); // emp id to delete
 
     // Quick action modals
     const [quickAction, setQuickAction] = useState(null); // {type: 'deduction'|'absence'|'bonus'|'pay', emp}
@@ -39,6 +41,21 @@ export default function Employees() {
 
     useEffect(() => { loadData(); }, []);
 
+    // Supabase Realtime auto‑refresh
+    useEffect(() => {
+        const timerRef = { current: null };
+        const debounceRefresh = () => {
+            if (timerRef.current) clearTimeout(timerRef.current);
+            timerRef.current = setTimeout(() => loadData(), 600);
+        };
+        const ch = supabase.channel('emp-realtime')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, debounceRefresh)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'salary_payments' }, debounceRefresh)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'employee_actions' }, debounceRefresh)
+            .subscribe();
+        return () => { supabase.removeChannel(ch); if (timerRef.current) clearTimeout(timerRef.current); };
+    }, []);
+
     const handleChange = (f, v) => setForm(p => ({ ...p, [f]: v }));
 
     const openAdd = () => { setEditingEmp(null); setForm(emptyForm); setShowModal(true); };
@@ -59,8 +76,7 @@ export default function Employees() {
     };
 
     const handleDelete = async (id) => {
-        if (!confirm('حذف هذا الموظف نهائياً؟')) return;
-        try { await employeesAPI.delete(id); if (selectedEmp?.id === id) setSelectedEmp(null); await loadData(); } catch (err) { console.error(err); }
+        try { await employeesAPI.delete(id); if (selectedEmp?.id === id) setSelectedEmp(null); setConfirmDelete(null); await loadData(); } catch (err) { console.error(err); }
     };
 
     const toggleActive = async (emp) => {
@@ -377,7 +393,7 @@ export default function Employees() {
                             <div className="flex gap-2 pt-2">
                                 <button onClick={() => { openEdit(selectedEmp); setSelectedEmp(null); }} className="flex-1 bg-purple-600 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-purple-700 shadow transition flex items-center justify-center gap-2 text-sm"><i className="fa-solid fa-pen"></i> تعديل</button>
                                 <button onClick={() => toggleActive(selectedEmp)} className="bg-white text-slate-600 px-4 py-2.5 rounded-xl font-bold border-2 border-slate-200 hover:bg-slate-50 transition text-sm">{selectedEmp.isActive ? '⏸ إيقاف' : '▶️ تفعيل'}</button>
-                                <button onClick={() => { handleDelete(selectedEmp.id); setSelectedEmp(null); }} className="bg-white text-red-600 px-4 py-2.5 rounded-xl font-bold border-2 border-red-200 hover:bg-red-50 transition text-sm"><i className="fa-solid fa-trash"></i></button>
+                                <button onClick={() => { setConfirmDelete(selectedEmp.id); }} className="bg-white text-red-600 px-4 py-2.5 rounded-xl font-bold border-2 border-red-200 hover:bg-red-50 transition text-sm"><i className="fa-solid fa-trash"></i></button>
                             </div>
                         </div>
                     </div>
@@ -431,6 +447,23 @@ export default function Employees() {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* ============ CONFIRM DELETE MODAL ============ */}
+            {confirmDelete && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-fade-in" onClick={() => setConfirmDelete(null)}>
+                    <div className="bg-white rounded-3xl w-full max-w-xs shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="p-6 text-center space-y-4">
+                            <div className="w-16 h-16 mx-auto bg-red-100 rounded-full flex items-center justify-center"><i className="fa-solid fa-trash text-2xl text-red-500"></i></div>
+                            <h3 className="font-extrabold text-lg text-slate-800">حذف الموظف؟</h3>
+                            <p className="text-sm text-slate-500">سيتم حذف جميع البيانات نهائياً</p>
+                            <div className="flex gap-3">
+                                <button onClick={() => setConfirmDelete(null)} className="flex-1 py-2.5 rounded-xl font-bold text-slate-600 bg-white border-2 border-slate-200 hover:bg-slate-50 transition">إلغاء</button>
+                                <button onClick={() => { handleDelete(confirmDelete); setSelectedEmp(null); }} className="flex-1 py-2.5 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 transition shadow-lg">حذف</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}
