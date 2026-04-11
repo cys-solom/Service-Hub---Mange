@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { walletsAPI } from '../services/api';
+import { useConfirm } from './ConfirmDialog';
 
 const USD_RATE_KEY = 'service_hub_usd_rate';
 const USD_RATE_TIMESTAMP_KEY = 'service_hub_usd_rate_timestamp';
@@ -34,6 +35,7 @@ export default function Wallets() {
     const [usdRate, setUsdRate] = useState(getUsdRate());
     const [rateLoading, setRateLoading] = useState(false);
     const [rateLastUpdate, setRateLastUpdate] = useState(null);
+    const { showConfirm, showAlert } = useConfirm();
 
     // Sync from context
     useEffect(() => {
@@ -121,7 +123,7 @@ export default function Wallets() {
             });
             setShowAddModal(false);
             await refreshData();
-        } catch (error) { console.error(error); alert('حدث خطأ'); }
+        } catch (error) { console.error(error); showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' }); }
     };
 
     // تعديل محفظة
@@ -137,7 +139,14 @@ export default function Wallets() {
 
     // حذف محفظة
     const handleDeleteWallet = async (id) => {
-        if (!confirm("حذف هذه المحفظة وجميع حركاتها؟")) return;
+        const confirmed = await showConfirm({
+            title: 'حذف المحفظة',
+            message: 'هل أنت متأكد من حذف هذه المحفظة وجميع حركاتها؟',
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
         try {
             await walletsAPI.delete(id);
             setSelectedWallet(null);
@@ -153,13 +162,13 @@ export default function Wallets() {
         const description = fd.get('description') || '';
         const walletId = showTxnModal;
 
-        if (amount <= 0) { alert("المبلغ يجب أن يكون أكبر من صفر"); return; }
+        if (amount <= 0) { showAlert({ title: 'خطأ', message: 'المبلغ يجب أن يكون أكبر من صفر', type: 'warning' }); return; }
 
         const wallet = wallets.find(w => w.id === walletId);
         if (!wallet) return;
 
         if (txnType === 'withdraw' && amount > wallet.balance) {
-            alert("الرصيد غير كافي!"); return;
+            showAlert({ title: 'رصيد غير كافي', message: 'الرصيد غير كافي!', type: 'danger' }); return;
         }
 
         try {
@@ -170,12 +179,19 @@ export default function Wallets() {
             }
             setShowTxnModal(null);
             await refreshData();
-        } catch (error) { console.error(error); alert('حدث خطأ'); }
+        } catch (error) { console.error(error); showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' }); }
     };
 
     // حذف حركة
     const deleteTransaction = async (txn) => {
-        if (!confirm('حذف هذه الحركة؟ سيتم تعديل رصيد المحفظة.')) return;
+        const confirmed = await showConfirm({
+            title: 'حذف الحركة',
+            message: 'هل أنت متأكد من حذف هذه الحركة؟ سيتم تعديل رصيد المحفظة.',
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
         try {
             await walletsAPI.deleteTransaction(txn);
             await refreshData();
@@ -191,7 +207,7 @@ export default function Wallets() {
             await walletsAPI.update(adjustBalanceWallet.id, { balance: newBalance });
             setAdjustBalanceWallet(null);
             await refreshData();
-        } catch (error) { console.error(error); alert('حدث خطأ'); }
+        } catch (error) { console.error(error); showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' }); }
     };
 
     const walletTxns = useMemo(() => {

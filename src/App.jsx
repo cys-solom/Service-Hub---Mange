@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { DataProvider, useData } from './context/DataContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ConfirmProvider } from './components/ConfirmDialog';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 
@@ -60,9 +61,9 @@ const MainLayout = () => {
           {activeTab === 'shifts' && checkPerm('shifts') && <Shifts />}
           {activeTab === 'wallets' && checkPerm('wallets') && <Wallets />}
           {activeTab === 'problems' && checkPerm('problems') && <Problems />}
-          {activeTab === 'users' && (checkPerm('all') || user.role === 'admin') && <Users />}
-          {activeTab === 'botSettings' && (checkPerm('botSettings') || checkPerm('all') || user.role === 'admin') && <BotSettings />}
-          {activeTab === 'employees' && (checkPerm('employees') || checkPerm('all') || user.role === 'admin') && <Employees />}
+          {activeTab === 'users' && (checkPerm('all') || user.role === 'admin' || user.role === 'director') && <Users />}
+          {activeTab === 'botSettings' && (checkPerm('botSettings') || checkPerm('all') || user.role === 'admin' || user.role === 'director') && <BotSettings />}
+          {activeTab === 'employees' && (checkPerm('employees') || checkPerm('all') || user.role === 'admin' || user.role === 'director') && <Employees />}
 
         </div>
       </main>
@@ -74,7 +75,9 @@ function App () {
   return (
     <AuthProvider>
       <DataProvider>
-        <MainLayout />
+        <ConfirmProvider>
+          <MainLayout />
+        </ConfirmProvider>
       </DataProvider>
     </AuthProvider>
   );

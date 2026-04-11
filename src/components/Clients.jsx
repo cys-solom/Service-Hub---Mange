@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { customersAPI, salesAPI } from '../services/api';
+import { useConfirm } from './ConfirmDialog';
 
 export default function Clients() {
     useEffect(() => { window.scrollTo(0, 0); }, []);
@@ -15,6 +16,7 @@ export default function Clients() {
     const [editingClient, setEditingClient] = useState(null);
     const [visibleCount, setVisibleCount] = useState(25);
     const [showDuplicatesOnly, setShowDuplicatesOnly] = useState(false);
+    const { showConfirm, showAlert } = useConfirm();
 
     useEffect(() => {
         setSales(ctxSales);
@@ -198,13 +200,20 @@ export default function Clients() {
             }
         } catch (error) {
             console.error(error);
-            alert('حدث خطأ أثناء الحفظ');
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ أثناء الحفظ', type: 'danger' });
         }
     };
 
     // Delete customer
     const deleteCustomer = async (id) => {
-        if (!confirm('حذف هذا العميل من قائمة العملاء؟ (الأوردرات لن تتأثر)')) return;
+        const confirmed = await showConfirm({
+            title: 'حذف العميل',
+            message: 'هل أنت متأكد من حذف هذا العميل من قائمة العملاء؟ (الأوردرات لن تتأثر)',
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
         try {
             const { supabase } = await import('../lib/supabase');
             await supabase.from('customers').delete().eq('id', id);

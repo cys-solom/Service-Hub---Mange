@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { expensesAPI, walletsAPI } from '../services/api';
+import { useConfirm } from './ConfirmDialog';
 
 export default function Expenses () {
     useEffect(() => { window.scrollTo(0, 0); }, []);
@@ -12,6 +13,7 @@ export default function Expenses () {
     const [showAddModal, setShowAddModal] = useState(false);
     const [editingExpense, setEditingExpense] = useState(null);
     const [categoryFilter, setCategoryFilter] = useState('all'); // all | daily | stock
+    const { showConfirm, showAlert } = useConfirm();
 
     useEffect(() => {
         setExpenses(ctxExpenses);
@@ -77,7 +79,7 @@ export default function Expenses () {
         if (data.walletId && data.walletId !== '') {
             const wallet = wallets.find(w => String(w.id) === String(data.walletId));
             if (wallet && Number(data.amount) > wallet.balance) {
-                alert(`رصيد المحفظة (${wallet.name}) غير كافي! الرصيد: ${wallet.balance}`);
+                showAlert({ title: 'رصيد غير كافي', message: `رصيد المحفظة (${wallet.name}) غير كافي! الرصيد: ${wallet.balance}`, type: 'danger' });
                 return;
             }
             await deductFromWallet(data.walletId, data.amount, `${data.type} - ${data.description || ''}`);
@@ -89,12 +91,12 @@ export default function Expenses () {
 
         try {
             await expensesAPI.create(data);
-            alert("تم تسجيل المصروف وخصمه من المحفظة ✅");
+            await showAlert({ title: 'تم بنجاح', message: 'تم تسجيل المصروف وخصمه من المحفظة ✅', type: 'success' });
             setShowAddModal(false);
             await refreshData();
         } catch (error) {
             console.error(error);
-            alert('حدث خطأ');
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' });
         }
     };
 
@@ -107,7 +109,7 @@ export default function Expenses () {
 
         try {
             await expensesAPI.update(editingExpense.id, data);
-            alert("تم تعديل المصروف بنجاح ✅");
+            await showAlert({ title: 'تم بنجاح', message: 'تم تعديل المصروف بنجاح ✅', type: 'success' });
             setEditingExpense(null);
             await refreshData();
         } catch (error) {
@@ -117,7 +119,14 @@ export default function Expenses () {
 
     // حذف مصروف (ورد المبلغ للمحفظة)
     const handleDelete = async (id) => {
-        if (!confirm("حذف هذا المصروف؟ (سيتم رد المبلغ للمحفظة إن وُجدت)")) return;
+        const confirmed = await showConfirm({
+            title: 'حذف المصروف',
+            message: 'هل أنت متأكد من حذف هذا المصروف؟ (سيتم رد المبلغ للمحفظة إن وُجدت)',
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
         const expense = expenses.find(e => e.id === id);
         if (expense && (expense.walletId || expense.wallet_id)) {
             await refundToWallet(expense.walletId || expense.wallet_id, expense.amount);

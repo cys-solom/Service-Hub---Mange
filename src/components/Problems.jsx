@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { problemsAPI } from '../services/api';
+import { useConfirm } from './ConfirmDialog';
 
 export default function Problems () {
     useEffect(() => {
@@ -17,6 +18,7 @@ export default function Problems () {
     const [selectedSaleId, setSelectedSaleId] = useState('');
     const [replacementAccountId, setReplacementAccountId] = useState('');
     const [description, setDescription] = useState('');
+    const { showConfirm, showAlert } = useConfirm();
 
     // الاستماع للبيانات القادمة من صفحة العملاء
     useEffect(() => {
@@ -53,8 +55,8 @@ export default function Problems () {
     const handleSubmit = async (e) => {
         e.preventDefault();
 
-        if (!selectedSaleId) return alert("يجب اختيار الأوردر");
-        if (!description) return alert("يجب كتابة وصف للمشكلة");
+        if (!selectedSaleId) { await showAlert({ title: 'خطأ', message: 'يجب اختيار الأوردر', type: 'warning' }); return; }
+        if (!description) { await showAlert({ title: 'خطأ', message: 'يجب كتابة وصف للمشكلة', type: 'warning' }); return; }
 
         const sale = sales.find(s => s.id == selectedSaleId);
 
@@ -68,7 +70,7 @@ export default function Problems () {
                 replacementAccountId: replacementAccountId || null,
             });
 
-            alert("تم تسجيل المشكلة بنجاح ✅");
+            await showAlert({ title: 'تم بنجاح', message: 'تم تسجيل المشكلة بنجاح ✅', type: 'success' });
             setShowModal(false);
             setSelectedSaleId('');
             setReplacementAccountId('');
@@ -76,31 +78,45 @@ export default function Problems () {
             refreshData();
         } catch (error) {
             console.error(error);
-            alert("حدث خطأ أثناء التسجيل");
+            await showAlert({ title: 'خطأ!', message: 'حدث خطأ أثناء التسجيل', type: 'danger' });
         }
     };
 
     // حذف مشكلة
     const handleDelete = async (id) => {
-        if (!confirm("حذف هذه المشكلة نهائياً؟")) return;
+        const confirmed = await showConfirm({
+            title: 'حذف المشكلة',
+            message: 'هل أنت متأكد من حذف هذه المشكلة نهائياً؟',
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
         try {
             await problemsAPI.delete(id);
             refreshData();
         } catch (error) {
             console.error(error);
-            alert("حدث خطأ أثناء الحذف");
+            await showAlert({ title: 'خطأ!', message: 'حدث خطأ أثناء الحذف', type: 'danger' });
         }
     };
 
     // تعليم المشكلة كمحلولة
     const handleResolve = async (id) => {
-        if (!confirm("تعليم المشكلة كـ 'تم الحل'؟")) return;
+        const confirmed = await showConfirm({
+            title: 'تأكيد الحل',
+            message: 'هل أنت متأكد من تعليم المشكلة كـ \'تم الحل\'\u061f',
+            confirmText: 'تم الحل',
+            cancelText: 'إلغاء',
+            type: 'success'
+        });
+        if (!confirmed) return;
         try {
             await problemsAPI.markResolved(id);
             refreshData();
         } catch (error) {
             console.error(error);
-            alert("حدث خطأ");
+            await showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' });
         }
     };
 

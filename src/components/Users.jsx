@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { usersAPI, salesAPI, accountsAPI } from '../services/api';
 import { useData } from '../context/DataContext';
+import { useConfirm } from './ConfirmDialog';
 
 // قائمة الصلاحيات — محدثة حسب أقسام الموقع الفعلية
 const PERMISSIONS_LIST = [
@@ -18,6 +19,7 @@ const PERMISSIONS_LIST = [
     { id: 'employees', label: 'الموظفين', icon: 'fa-id-card-clip', desc: 'إدارة الموظفين والمرتبات والقبض' },
     { id: 'botSettings', label: 'إعدادات البوت', icon: 'fa-robot', desc: 'التحكم في إشعارات بوت تليجرام' },
     { id: 'manage_attendance', label: 'إدارة الحضور والرواتب', icon: 'fa-user-clock', desc: 'عرض حضور الموظفين وحساب الرواتب' },
+    { id: 'view_daily_profit', label: 'صافي الربح اليومي', icon: 'fa-coins', desc: 'عرض كارت صافي الدخل اليومي في الداشبورد' },
 ];
 
 export default function Users () {
@@ -26,6 +28,7 @@ export default function Users () {
     }, []);
 
     const { sales, accounts } = useData();
+    const { showConfirm, showAlert } = useConfirm();
 
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -87,7 +90,7 @@ export default function Users () {
     const handleSave = async (e) => {
         e.preventDefault();
         const formData = new FormData(e.target);
-        const permissions = selectedRole === 'admin'
+        const permissions = (selectedRole === 'admin' || selectedRole === 'director')
             ? ['all']
             : PERMISSIONS_LIST.filter(p => formData.get(`perm_${p.id}`) === 'on').map(p => p.id);
 
@@ -107,18 +110,24 @@ export default function Users () {
             fetchUsers();
         } catch (error) {
             console.error(error);
-            alert('حدث خطأ أثناء الحفظ');
+            await showAlert({ title: 'خطأ!', message: 'حدث خطأ أثناء الحفظ', type: 'danger' });
         }
     };
 
     const handleDelete = async (id) => {
-        if (confirm('حذف المستخدم؟')) {
-            try {
-                await usersAPI.delete(id);
-                fetchUsers();
-            } catch (error) {
-                console.error(error);
-            }
+        const confirmed = await showConfirm({
+            title: 'حذف المستخدم',
+            message: 'هل أنت متأكد من حذف هذا المستخدم؟ لا يمكن التراجع عن هذا الإجراء.',
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
+        try {
+            await usersAPI.delete(id);
+            fetchUsers();
+        } catch (error) {
+            console.error(error);
         }
     };
 
@@ -129,6 +138,15 @@ export default function Users () {
     const formatTime = (date) => {
         if (!date) return '';
         return new Date(date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    };
+
+    const getRoleInfo = (role) => {
+        const map = {
+            admin: { label: '👑 Admin', color: 'bg-purple-50 text-purple-700 border-purple-200', iconBg: 'bg-purple-50 text-purple-600 border-purple-200', icon: 'fa-user-shield', gradient: 'bg-gradient-to-r from-purple-500 to-pink-500' },
+            director: { label: '⭐ Director', color: 'bg-amber-50 text-amber-700 border-amber-200', iconBg: 'bg-amber-50 text-amber-600 border-amber-200', icon: 'fa-crown', gradient: 'bg-gradient-to-r from-amber-500 to-orange-500' },
+            moderator: { label: '🔧 Moderator', color: 'bg-blue-50 text-blue-700 border-blue-200', iconBg: 'bg-blue-50 text-blue-600 border-blue-200', icon: 'fa-user', gradient: 'bg-gradient-to-r from-blue-500 to-indigo-500' },
+        };
+        return map[role] || map.moderator;
     };
 
     if (loading) return <div className="text-center p-10 text-slate-500"><i className="fa-solid fa-spinner fa-spin ml-2"></i>جاري تحميل المستخدمين...</div>;
@@ -151,7 +169,7 @@ export default function Users () {
             </div>
 
             {/* Quick Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm text-center">
                     <p className="text-3xl font-black text-indigo-600">{users.length}</p>
                     <p className="text-xs font-bold text-slate-400 mt-1">إجمالي المستخدمين</p>
@@ -159,6 +177,10 @@ export default function Users () {
                 <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm text-center">
                     <p className="text-3xl font-black text-purple-600">{users.filter(u => u.role === 'admin').length}</p>
                     <p className="text-xs font-bold text-slate-400 mt-1">أدمن</p>
+                </div>
+                <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm text-center">
+                    <p className="text-3xl font-black text-amber-600">{users.filter(u => u.role === 'director').length}</p>
+                    <p className="text-xs font-bold text-slate-400 mt-1">دايركتور</p>
                 </div>
                 <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm text-center">
                     <p className="text-3xl font-black text-blue-600">{users.filter(u => u.role === 'moderator').length}</p>
@@ -176,22 +198,23 @@ export default function Users () {
                     const stats = userStats[u.id] || {};
                     const isExpanded = expandedUser === u.id;
                     const perms = Array.isArray(u.permissions) ? u.permissions : JSON.parse(u.permissions || '[]');
+                    const roleInfo = getRoleInfo(u.role);
 
                     return (
                         <div key={u.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group relative overflow-hidden">
-                            <div className={`absolute top-0 left-0 w-full h-1.5 ${u.role === 'admin' ? 'bg-gradient-to-r from-purple-500 to-pink-500' : 'bg-gradient-to-r from-blue-500 to-indigo-500'}`}></div>
+                            <div className={`absolute top-0 left-0 w-full h-1.5 ${roleInfo.gradient}`}></div>
 
                             {/* User Header */}
                             <div className="p-6">
                                 <div className="flex justify-between items-start mb-4">
                                     <div className="flex items-center gap-4">
-                                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl border-2 transition-colors ${u.role === 'admin' ? 'bg-purple-50 text-purple-600 border-purple-200' : 'bg-blue-50 text-blue-600 border-blue-200'}`}>
-                                            <i className={`fa-solid ${u.role === 'admin' ? 'fa-user-shield' : 'fa-user'}`}></i>
+                                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl border-2 transition-colors ${roleInfo.iconBg}`}>
+                                            <i className={`fa-solid ${roleInfo.icon}`}></i>
                                         </div>
                                         <div>
                                             <h3 className="font-extrabold text-lg text-slate-800">{u.username}</h3>
-                                            <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${u.role === 'admin' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-blue-50 text-blue-700 border-blue-200'}`}>
-                                                {u.role === 'admin' ? '👑 Admin' : '🔧 Moderator'}
+                                            <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${roleInfo.color}`}>
+                                                {roleInfo.label}
                                             </span>
                                         </div>
                                     </div>
@@ -389,31 +412,44 @@ export default function Users () {
                                 {/* Role Selection */}
                                 <div>
                                     <label className="label-style mb-3 block">نوع المستخدم</label>
-                                    <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid grid-cols-3 gap-3">
                                         <button
                                             type="button"
                                             onClick={() => setSelectedRole('moderator')}
-                                            className={`flex flex-col items-center gap-3 p-5 rounded-2xl border-2 transition-all ${selectedRole === 'moderator' ? 'border-blue-500 bg-blue-50 shadow-lg shadow-blue-100' : 'border-slate-200 bg-white hover:border-blue-300'}`}
+                                            className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all ${selectedRole === 'moderator' ? 'border-blue-500 bg-blue-50 shadow-lg shadow-blue-100' : 'border-slate-200 bg-white hover:border-blue-300'}`}
                                         >
-                                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl transition-colors ${selectedRole === 'moderator' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl transition-colors ${selectedRole === 'moderator' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
                                                 <i className="fa-solid fa-user"></i>
                                             </div>
                                             <div className="text-center">
-                                                <p className={`font-bold text-sm ${selectedRole === 'moderator' ? 'text-blue-700' : 'text-slate-600'}`}>مودريتور</p>
-                                                <p className="text-[10px] text-slate-400 font-medium mt-0.5">صلاحيات محددة</p>
+                                                <p className={`font-bold text-xs ${selectedRole === 'moderator' ? 'text-blue-700' : 'text-slate-600'}`}>مودريتور</p>
+                                                <p className="text-[9px] text-slate-400 font-medium mt-0.5">صلاحيات محددة</p>
+                                            </div>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedRole('director')}
+                                            className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all ${selectedRole === 'director' ? 'border-amber-500 bg-amber-50 shadow-lg shadow-amber-100' : 'border-slate-200 bg-white hover:border-amber-300'}`}
+                                        >
+                                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl transition-colors ${selectedRole === 'director' ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                <i className="fa-solid fa-crown"></i>
+                                            </div>
+                                            <div className="text-center">
+                                                <p className={`font-bold text-xs ${selectedRole === 'director' ? 'text-amber-700' : 'text-slate-600'}`}>دايركتور</p>
+                                                <p className="text-[9px] text-slate-400 font-medium mt-0.5">صلاحية كاملة</p>
                                             </div>
                                         </button>
                                         <button
                                             type="button"
                                             onClick={() => setSelectedRole('admin')}
-                                            className={`flex flex-col items-center gap-3 p-5 rounded-2xl border-2 transition-all ${selectedRole === 'admin' ? 'border-purple-500 bg-purple-50 shadow-lg shadow-purple-100' : 'border-slate-200 bg-white hover:border-purple-300'}`}
+                                            className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all ${selectedRole === 'admin' ? 'border-purple-500 bg-purple-50 shadow-lg shadow-purple-100' : 'border-slate-200 bg-white hover:border-purple-300'}`}
                                         >
-                                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl transition-colors ${selectedRole === 'admin' ? 'bg-purple-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl transition-colors ${selectedRole === 'admin' ? 'bg-purple-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
                                                 <i className="fa-solid fa-user-shield"></i>
                                             </div>
                                             <div className="text-center">
-                                                <p className={`font-bold text-sm ${selectedRole === 'admin' ? 'text-purple-700' : 'text-slate-600'}`}>أدمن</p>
-                                                <p className="text-[10px] text-slate-400 font-medium mt-0.5">صلاحية كاملة</p>
+                                                <p className={`font-bold text-xs ${selectedRole === 'admin' ? 'text-purple-700' : 'text-slate-600'}`}>أدمن</p>
+                                                <p className="text-[9px] text-slate-400 font-medium mt-0.5">صلاحية كاملة</p>
                                             </div>
                                         </button>
                                     </div>
@@ -497,15 +533,17 @@ export default function Users () {
                                     </div>
                                 )}
 
-                                {/* Admin Notice */}
-                                {selectedRole === 'admin' && (
-                                    <div className="bg-purple-50 border-2 border-purple-200 rounded-2xl p-4 flex items-center gap-3">
-                                        <div className="w-10 h-10 bg-purple-500 rounded-xl flex items-center justify-center text-white flex-shrink-0">
-                                            <i className="fa-solid fa-shield-halved"></i>
+                                {/* Admin/Director Notice */}
+                                {(selectedRole === 'admin' || selectedRole === 'director') && (
+                                    <div className={`border-2 rounded-2xl p-4 flex items-center gap-3 ${selectedRole === 'admin' ? 'bg-purple-50 border-purple-200' : 'bg-amber-50 border-amber-200'}`}>
+                                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white flex-shrink-0 ${selectedRole === 'admin' ? 'bg-purple-500' : 'bg-amber-500'}`}>
+                                            <i className={`fa-solid ${selectedRole === 'admin' ? 'fa-shield-halved' : 'fa-crown'}`}></i>
                                         </div>
                                         <div>
-                                            <p className="text-sm font-bold text-purple-700">صلاحية كاملة</p>
-                                            <p className="text-xs text-purple-500 font-medium">الأدمن لديه وصول كامل لجميع الأقسام والإعدادات تلقائياً</p>
+                                            <p className={`text-sm font-bold ${selectedRole === 'admin' ? 'text-purple-700' : 'text-amber-700'}`}>صلاحية كاملة</p>
+                                            <p className={`text-xs font-medium ${selectedRole === 'admin' ? 'text-purple-500' : 'text-amber-500'}`}>
+                                                {selectedRole === 'admin' ? 'الأدمن' : 'الدايركتور'} لديه وصول كامل لجميع الأقسام والإعدادات تلقائياً
+                                            </p>
                                         </div>
                                     </div>
                                 )}

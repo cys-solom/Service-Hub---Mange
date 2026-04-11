@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { employeesAPI, salaryPaymentsAPI, employeeActionsAPI } from '../services/api';
 import { supabase } from '../lib/supabase';
+import { useConfirm } from './ConfirmDialog';
 
 const DAY_NAMES = { saturday: 'السبت', sunday: 'الأحد', monday: 'الاثنين', tuesday: 'الثلاثاء', wednesday: 'الأربعاء', thursday: 'الخميس', friday: 'الجمعة' };
 const DAY_EN = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
@@ -26,6 +27,7 @@ export default function Employees() {
     const [quickAmount, setQuickAmount] = useState('');
     const [quickDesc, setQuickDesc] = useState('');
     const [quickDate, setQuickDate] = useState(new Date().toISOString().split('T')[0]);
+    const { showAlert } = useConfirm();
 
     const emptyForm = { name: '', phone: '', role: '', baseSalary: 0, bonus: 0, deductions: 0, absenceDays: 0, absenceDeductionPerDay: 0, notes: '', joinDate: new Date().toISOString().split('T')[0], payDay: 'thursday', payCycle: 'weekly' };
     const [form, setForm] = useState(emptyForm);
@@ -67,12 +69,12 @@ export default function Employees() {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!form.name.trim()) return alert('اسم الموظف مطلوب');
+        if (!form.name.trim()) { showAlert({ title: 'خطأ', message: 'اسم الموظف مطلوب', type: 'warning' }); return; }
         try {
             if (editingEmp) await employeesAPI.update(editingEmp.id, form);
             else await employeesAPI.create(form);
             setShowModal(false); setEditingEmp(null); setForm(emptyForm); await loadData();
-        } catch (err) { console.error(err); alert('حدث خطأ'); }
+        } catch (err) { console.error(err); showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' }); }
     };
 
     const handleDelete = async (id) => {
@@ -88,13 +90,13 @@ export default function Employees() {
         if (!quickAction) return;
         const { type, emp } = quickAction;
         const amount = Number(quickAmount) || 0;
-        if (amount <= 0 && type !== 'absence') return alert('أدخل مبلغ صحيح');
+        if (amount <= 0 && type !== 'absence') { showAlert({ title: 'خطأ', message: 'أدخل مبلغ صحيح', type: 'warning' }); return; }
 
         try {
             if (type === 'pay') {
                 await salaryPaymentsAPI.create({ employeeId: emp.id, amount, notes: quickDesc, paymentDate: quickDate });
             } else if (type === 'deduction') {
-                if (!quickDesc.trim()) return alert('أدخل سبب الخصم');
+                if (!quickDesc.trim()) { showAlert({ title: 'خطأ', message: 'أدخل سبب الخصم', type: 'warning' }); return; }
                 await employeeActionsAPI.create({ employeeId: emp.id, actionType: 'deduction', amount, description: quickDesc, actionDate: quickDate });
                 await employeesAPI.update(emp.id, { deductions: (emp.deductions || 0) + amount });
             } else if (type === 'absence') {
@@ -102,13 +104,13 @@ export default function Employees() {
                 await employeeActionsAPI.create({ employeeId: emp.id, actionType: 'absence', amount: days, description: quickDesc || 'غياب', actionDate: quickDate });
                 await employeesAPI.update(emp.id, { absenceDays: (emp.absenceDays || 0) + days });
             } else if (type === 'bonus') {
-                if (!quickDesc.trim()) return alert('أدخل سبب المكافأة');
+                if (!quickDesc.trim()) { showAlert({ title: 'خطأ', message: 'أدخل سبب المكافأة', type: 'warning' }); return; }
                 await employeeActionsAPI.create({ employeeId: emp.id, actionType: 'bonus', amount, description: quickDesc, actionDate: quickDate });
                 await employeesAPI.update(emp.id, { bonus: (emp.bonus || 0) + amount });
             }
             setQuickAction(null); setQuickAmount(''); setQuickDesc(''); setQuickDate(new Date().toISOString().split('T')[0]);
             await loadData();
-        } catch (err) { console.error(err); alert('حدث خطأ'); }
+        } catch (err) { console.error(err); showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' }); }
     };
 
     // Open details

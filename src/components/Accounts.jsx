@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { accountsAPI, sectionsAPI, quickLinksAPI } from '../services/api';
+import { useConfirm } from './ConfirmDialog';
 
 export default function Accounts() {
     const { user } = useAuth();
@@ -23,6 +24,7 @@ export default function Accounts() {
     const [quickLinks, setQuickLinks] = useState([]);
     const [showLinkModal, setShowLinkModal] = useState(false);
     const [linksExpanded, setLinksExpanded] = useState(true);
+    const { showConfirm, showAlert } = useConfirm();
 
     useEffect(() => { window.scrollTo(0, 0); }, []);
 
@@ -45,7 +47,7 @@ export default function Accounts() {
             await quickLinksAPI.create({ label, url, createdBy: user?.username || 'Admin' });
             setShowLinkModal(false);
             await refreshQuickLinks();
-        } catch (err) { console.error(err); alert('حدث خطأ'); }
+        } catch (err) { console.error(err); showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' }); }
     };
 
     const deleteLink = async (id) => {
@@ -136,19 +138,26 @@ export default function Accounts() {
         const name = fd.get('sectionName')?.trim();
         const type = fd.get('sectionType');
         if (!name) return;
-        if (sections.find(s => s.name === name)) { alert('يوجد سجل بنفس الاسم بالفعل!'); return; }
+        if (sections.find(s => s.name === name)) { showAlert({ title: 'خطأ', message: 'يوجد سجل بنفس الاسم بالفعل!', type: 'warning' }); return; }
         try {
             await sectionsAPI.create({ name, type });
             setShowSectionModal(false);
             await refreshData();
         } catch (error) {
             console.error(error);
-            alert('حدث خطأ');
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' });
         }
     };
 
     const deleteSection = async (sec) => {
-        if (!confirm(`حذف قسم "${sec.name}" وجميع محتوياته (${sectionCounts[sec.name] || 0} عنصر)؟`)) return;
+        const confirmed = await showConfirm({
+            title: 'حذف القسم',
+            message: `هل أنت متأكد من حذف قسم "${sec.name}" وجميع محتوياته (${sectionCounts[sec.name] || 0} عنصر)؟`,
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
         try {
             await sectionsAPI.delete(sec.id, sec.name);
             if (selectedSection === sec.id) setSelectedSection(null);
@@ -195,7 +204,7 @@ export default function Accounts() {
             await refreshData();
         } catch (error) {
             console.error(error);
-            alert('حدث خطأ أثناء الإضافة');
+            await showAlert({ title: 'خطأ!', message: 'حدث خطأ أثناء الإضافة', type: 'danger' });
         }
     };
 
@@ -223,7 +232,14 @@ export default function Accounts() {
     };
 
     const deleteAccount = async (id) => {
-        if (!confirm('حذف هذا العنصر؟')) return;
+        const confirmed = await showConfirm({
+            title: 'حذف العنصر',
+            message: 'هل أنت متأكد من حذف هذا العنصر نهائياً؟',
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
         try {
             await accountsAPI.delete(id);
             await refreshData();

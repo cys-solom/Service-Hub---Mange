@@ -2,9 +2,11 @@ import { useState, useEffect, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { attendanceAPI, usersAPI } from '../services/api';
+import { useConfirm } from './ConfirmDialog';
 
 export default function Attendance () {
     const { user } = useAuth();
+    const { showAlert } = useConfirm();
 
     // --- States ---
     const [moderators, setModerators] = useState([]);
@@ -127,14 +129,14 @@ export default function Attendance () {
         try {
             const result = await attendanceAPI.checkIn(user.id, todayStr, timeStr);
             if (result.alreadyExists) {
-                alert("تم تسجيل حضورك بالفعل اليوم ✅");
+                showAlert({ title: 'تم بالفعل', message: 'تم تسجيل حضورك بالفعل اليوم ✅', type: 'success' });
             } else {
-                alert("تم تسجيل الحضور ✅");
+                showAlert({ title: 'تم بنجاح', message: 'تم تسجيل الحضور ✅', type: 'success' });
             }
             fetchData();
         } catch (e) {
             console.error(e);
-            alert("خطأ في تسجيل الحضور");
+            showAlert({ title: 'خطأ!', message: 'خطأ في تسجيل الحضور', type: 'danger' });
         }
     };
 
@@ -151,12 +153,12 @@ export default function Attendance () {
                 base_salary: isUserAdmin ? formData.get('base_salary') : currentUser.base_salary,
                 vodafone_cash: formData.get('vodafone_cash'),
             });
-            alert("تم حفظ البيانات بنجاح ✅");
+            showAlert({ title: 'تم بنجاح', message: 'تم حفظ البيانات بنجاح ✅', type: 'success' });
             setShowEditModal(false);
             fetchData();
         } catch (error) {
             console.error(error);
-            alert("فشل الحفظ");
+            showAlert({ title: 'خطأ!', message: 'فشل الحفظ', type: 'danger' });
         }
     };
 
@@ -166,7 +168,7 @@ export default function Attendance () {
         if (!bonusAmount) return;
         try {
             await attendanceAPI.addBonus(currentUser.id, getCurrentLocalDate(), Number(bonusAmount));
-            setShowBonusModal(false); fetchData(); alert("تم البونص 💰");
+            setShowBonusModal(false); fetchData(); showAlert({ title: 'تم بنجاح', message: 'تم البونص 💰', type: 'success' });
         } catch (error) {
             console.error(error);
         }
@@ -178,7 +180,7 @@ export default function Attendance () {
         if (!deductionAmount) return;
         try {
             await attendanceAPI.addBonus(currentUser.id, getCurrentLocalDate(), -Number(deductionAmount));
-            setShowDeductionModal(false); fetchData(); alert("تم الخصم 📉");
+            setShowDeductionModal(false); fetchData(); showAlert({ title: 'تم بنجاح', message: 'تم الخصم 📉', type: 'success' });
         } catch (error) {
             console.error(error);
         }

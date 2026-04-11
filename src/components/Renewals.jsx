@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { salesAPI, walletsAPI } from '../services/api';
 import telegram from '../services/telegram';
+import { useConfirm } from './ConfirmDialog';
 
 export default function Renewals() {
     useEffect(() => { window.scrollTo(0, 0); }, []);
@@ -15,6 +16,7 @@ export default function Renewals() {
     // Renewal modals
     const [showRenewModal, setShowRenewModal] = useState(null);
     const [quickRenewing, setQuickRenewing] = useState(null);
+    const { showAlert } = useConfirm();
 
     useEffect(() => {
         setSales(ctxSales);
@@ -120,7 +122,7 @@ export default function Renewals() {
         } catch (error) {
             console.error(error);
             setQuickRenewing(null);
-            alert('حدث خطأ');
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' });
         }
     };
 
@@ -174,7 +176,7 @@ export default function Renewals() {
             await refreshData();
         } catch (error) {
             console.error(error);
-            alert('حدث خطأ');
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' });
         }
     };
 

@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { productsAPI, accountsAPI } from '../services/api';
+import { useConfirm } from './ConfirmDialog';
 
 export default function Products() {
     const { user, hasPermission } = useAuth();
     const { products: ctxProducts, sections: ctxSections, accounts: ctxAccounts, refreshData, reorderProducts } = useData();
-    const isAdmin = user?.role === 'admin' || hasPermission('all');
+    const isAdmin = user?.role === 'admin' || user?.role === 'director' || hasPermission('all');
+    const { showConfirm, showAlert } = useConfirm();
 
     const [products, setProducts] = useState([]);
     const [inventorySections, setInventorySections] = useState([]);
@@ -60,7 +62,7 @@ export default function Products() {
         // Check for duplicate name
         const duplicate = products.find(p => p.name === data.name && (!editingProduct || p.id !== editingProduct.id));
         if (duplicate) {
-            alert('⚠️ يوجد منتج آخر بنفس الاسم! اختر اسم مختلف.');
+            showAlert({ title: 'خطأ', message: '⚠️ يوجد منتج آخر بنفس الاسم! اختر اسم مختلف.', type: 'warning' });
             return;
         }
 
@@ -80,12 +82,19 @@ export default function Products() {
             await refreshData();
         } catch (error) {
             console.error('Product save error:', error);
-            alert('حدث خطأ أثناء الحفظ: ' + (error?.message || error?.details || 'خطأ غير معروف'));
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ أثناء الحفظ: ' + (error?.message || error?.details || 'خطأ غير معروف'), type: 'danger' });
         }
     };
 
     const deleteProduct = async (id) => {
-        if (!confirm('حذف هذا المنتج؟')) return;
+        const confirmed = await showConfirm({
+            title: 'حذف المنتج',
+            message: 'هل أنت متأكد من حذف هذا المنتج؟',
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
         try {
             await productsAPI.delete(id);
             await refreshData();

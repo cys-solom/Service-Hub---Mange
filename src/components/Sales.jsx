@@ -4,11 +4,13 @@ import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { salesAPI, accountsAPI, walletsAPI, customersAPI } from '../services/api';
 import * as XLSX from 'xlsx';
+import { useConfirm } from './ConfirmDialog';
 
 export default function Sales() {
     const { user, hasPermission } = useAuth();
     const { products, sales: ctxSales, wallets: ctxWallets, customers: ctxCustomers, accounts: ctxAccounts, refreshData } = useData();
-    const isAdmin = user?.role === 'admin' || hasPermission('all');
+    const isAdmin = user?.role === 'admin' || user?.role === 'director' || hasPermission('all');
+    const { showConfirm, showAlert } = useConfirm();
 
     // ========= States =========
     const [sales, setSales] = useState([]);
@@ -197,7 +199,7 @@ export default function Sales() {
         // Wallet is REQUIRED when customer has paid anything
         const hasPaidSomething = isPaid || (!isPaid && remainingAmount > 0 && remainingAmount < finalPrice);
         if (!walletId && hasPaidSomething) {
-            alert('يجب اختيار المحفظة عند الدفع (كامل أو جزئي)');
+            showAlert({ title: 'خطأ', message: 'يجب اختيار المحفظة عند الدفع (كامل أو جزئي)', type: 'warning' });
             return;
         }
 
@@ -327,7 +329,7 @@ export default function Sales() {
             await refreshData();
         } catch (error) {
             console.error('Error saving sale:', error);
-            alert('حدث خطأ أثناء الحفظ: ' + (error?.message || error?.details || 'خطأ غير معروف'));
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ أثناء الحفظ: ' + (error?.message || error?.details || 'خطأ غير معروف'), type: 'danger' });
         }
     };
 
@@ -422,7 +424,14 @@ export default function Sales() {
                 productName: sale.productName,
             });
         } else {
-            if (!confirm('حذف هذا البيع؟')) return;
+            const confirmed = await showConfirm({
+                title: 'حذف البيع',
+                message: 'هل أنت متأكد من حذف هذا البيع؟',
+                confirmText: 'حذف',
+                cancelText: 'إلغاء',
+                type: 'danger'
+            });
+            if (!confirmed) return;
             try {
                 // عكس المحفظة قبل الحذف
                 await reverseWalletForSale(sale);
@@ -454,7 +463,7 @@ export default function Sales() {
             await refreshData();
         } catch (error) {
             console.error(error);
-            alert('حدث خطأ: ' + (error?.message || ''));
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ: ' + (error?.message || ''), type: 'danger' });
         }
         setDeleteLoading(false);
     };
