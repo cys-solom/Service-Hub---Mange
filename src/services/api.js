@@ -637,12 +637,13 @@ export const usersAPI = {
                 const bcrypt = await import('bcryptjs');
                 updates.password = await bcrypt.hash(userData.password, 10);
             }
-            await supabase.from('users').update(updates).eq('id', userData.id);
+            const { error } = await supabase.from('users').update(updates).eq('id', userData.id);
+            if (error) { console.error('Update user error:', error); throw error; }
         } else {
             // Create new
             const bcrypt = await import('bcryptjs');
             const hashedPassword = await bcrypt.hash(userData.password, 10);
-            await supabase.from('users').insert({
+            const { error } = await supabase.from('users').insert({
                 username: userData.username,
                 password: hashedPassword,
                 role: userData.role || 'moderator',
@@ -650,6 +651,7 @@ export const usersAPI = {
                 base_salary: userData.base_salary || 0,
                 vodafone_cash: userData.vodafone_cash || '',
             });
+            if (error) { console.error('Create user error:', error); throw error; }
         }
     },
 

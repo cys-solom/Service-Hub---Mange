@@ -110,7 +110,7 @@ export default function Users () {
             fetchUsers();
         } catch (error) {
             console.error(error);
-            await showAlert({ title: 'خطأ!', message: 'حدث خطأ أثناء الحفظ', type: 'danger' });
+            await showAlert({ title: 'خطأ!', message: error?.message || 'حدث خطأ أثناء الحفظ', type: 'danger' });
         }
     };
 

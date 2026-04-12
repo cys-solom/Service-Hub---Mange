@@ -133,13 +133,14 @@ export default function Dashboard() {
 
             {/* --- الكروت الرئيسية --- */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                <StatCard title="إجمالي المبيعات" engTitle="Total Sales" value={stats.totalSales} gradient="bg-gradient-to-br from-indigo-600 to-blue-700" icon="fa-cart-shopping" />
-                <StatCard title="إجمالي الإيرادات" engTitle="Total Revenue" value={`${stats.totalRevenue.toLocaleString()} EGP`} gradient="bg-gradient-to-br from-emerald-500 to-teal-700" icon="fa-sack-dollar" />
-                <StatCard title="المحصّل" engTitle="Collected" value={`${stats.totalCollected.toLocaleString()} EGP`} gradient="bg-gradient-to-br from-cyan-500 to-blue-600" icon="fa-hand-holding-dollar" />
-                <StatCard title="المديونيات" engTitle="Outstanding" value={`${stats.totalRemaining.toLocaleString()} EGP`} gradient="bg-gradient-to-br from-red-500 to-rose-700" icon="fa-money-bill-transfer" />
-
+                <StatCard title="إجمالي الأوردرات" engTitle="Total Orders" value={stats.totalSales} gradient="bg-gradient-to-br from-indigo-600 to-blue-700" icon="fa-cart-shopping" />
+                
                 {canViewDailyProfit && (
                     <>
+                        <StatCard title="إجمالي الإيرادات" engTitle="Total Revenue" value={`${stats.totalRevenue.toLocaleString()} EGP`} gradient="bg-gradient-to-br from-emerald-500 to-teal-700" icon="fa-sack-dollar" />
+                        <StatCard title="المحصّل" engTitle="Collected" value={`${stats.totalCollected.toLocaleString()} EGP`} gradient="bg-gradient-to-br from-cyan-500 to-blue-600" icon="fa-hand-holding-dollar" />
+                        <StatCard title="المديونيات" engTitle="Outstanding" value={`${stats.totalRemaining.toLocaleString()} EGP`} gradient="bg-gradient-to-br from-red-500 to-rose-700" icon="fa-money-bill-transfer" />
+
                         <StatCard title="مصروفات يومية" engTitle="Daily Expenses" value={`${stats.totalDailyExpenses.toLocaleString()} EGP`} subTitle="إعلانات - اشتراكات - رواتب" gradient="bg-gradient-to-br from-amber-500 to-orange-600" icon="fa-clock" />
                         <StatCard title="مصروفات مخزون" engTitle="Stock Expenses" value={`${stats.totalStockExpenses.toLocaleString()} EGP`} subTitle="شراء استوك وحسابات" gradient="bg-gradient-to-br from-purple-600 to-violet-800" icon="fa-boxes-stacked" />
                         <StatCard title="إجمالي الربح" engTitle="Gross Profit" value={`${stats.grossProfit.toLocaleString()} EGP`} subTitle="الإيرادات - المصروفات اليومية" gradient={`bg-gradient-to-br ${stats.grossProfit >= 0 ? 'from-emerald-600 to-green-800' : 'from-red-600 to-red-900'}`} icon="fa-chart-line" />
@@ -148,9 +149,10 @@ export default function Dashboard() {
                         <StatCard title="ربح اليوم" engTitle="Today's Profit" value={`${stats.dailyProfit.toLocaleString()} EGP`} subTitle={`إيرادات ${stats.dailyRevenue.toLocaleString()} - مصروفات ${stats.todayDailyExpenses.toLocaleString()}`} gradient={`bg-gradient-to-br ${stats.dailyProfit >= 0 ? 'from-teal-500 to-emerald-700' : 'from-red-600 to-rose-800'}`} icon="fa-sun" />
                     </>
                 )}
-                <StatCard title="مبيعات اليوم" engTitle="Today" value={stats.dailyCount} subTitle={`${stats.dailyRevenue.toLocaleString()} EGP`} gradient="bg-gradient-to-br from-violet-500 to-purple-700" icon="fa-calendar-day" />
-                <StatCard title="مبيعات الأسبوع" engTitle="This Week" value={stats.weeklyCount} subTitle={`${stats.weeklyRevenue.toLocaleString()} EGP`} gradient="bg-gradient-to-br from-fuchsia-500 to-pink-700" icon="fa-calendar-week" />
-                <StatCard title="مبيعات الشهر" engTitle="This Month" value={stats.monthlyCount} subTitle={`${stats.monthlyRevenue.toLocaleString()} EGP`} gradient="bg-gradient-to-br from-orange-500 to-amber-600" icon="fa-calendar-days" />
+
+                <StatCard title="إيراد اليوم" engTitle="Today" value={`${canViewDailyProfit ? stats.dailyRevenue.toLocaleString() + ' EGP' : stats.dailyCount}`} subTitle={canViewDailyProfit ? `${stats.dailyCount} أوردر` : 'أوردر'} gradient="bg-gradient-to-br from-violet-500 to-purple-700" icon="fa-calendar-day" />
+                <StatCard title="مبيعات الأسبوع" engTitle="This Week" value={canViewDailyProfit ? `${stats.weeklyRevenue.toLocaleString()} EGP` : stats.weeklyCount} subTitle={canViewDailyProfit ? `${stats.weeklyCount} أوردر` : 'أوردر'} gradient="bg-gradient-to-br from-fuchsia-500 to-pink-700" icon="fa-calendar-week" />
+                <StatCard title="مبيعات الشهر" engTitle="This Month" value={canViewDailyProfit ? `${stats.monthlyRevenue.toLocaleString()} EGP` : stats.monthlyCount} subTitle={canViewDailyProfit ? `${stats.monthlyCount} أوردر` : 'أوردر'} gradient="bg-gradient-to-br from-orange-500 to-amber-600" icon="fa-calendar-days" />
 
                 <StatCard title="المنتجات المتاحة" engTitle="Products" value={stats.totalProducts} gradient="bg-gradient-to-br from-slate-600 to-slate-800" icon="fa-boxes-stacked" />
                 <StatCard title="الأكثر مبيعاً" engTitle="Top Product" value={stats.topProduct} subTitle={`${stats.topProductCount} مبيعة`} gradient="bg-gradient-to-br from-lime-500 to-green-600" icon="fa-trophy" />
