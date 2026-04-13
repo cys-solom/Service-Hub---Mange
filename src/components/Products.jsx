@@ -53,6 +53,7 @@ export default function Products() {
             name: formData.get('name').trim(),
             price: Number(formData.get('price')),
             duration: Number(formData.get('duration') || 30),
+            defaultWarranty: Number(formData.get('defaultWarranty') || 0),
             description: formData.get('description') || '',
             category: formData.get('category') || '',
             inventoryProduct: formData.get('inventoryProduct') || '',
@@ -207,6 +208,11 @@ export default function Products() {
                                                     <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-bold flex items-center gap-1">
                                                         <i className="fa-solid fa-calendar-days text-[9px]"></i> {p.duration || 30} يوم
                                                     </span>
+                                                    {(p.default_warranty > 0) && (
+                                                        <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                                                            <i className="fa-solid fa-shield-halved text-[9px]"></i> ضمان {p.default_warranty} يوم
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </div>
                                             {isAdmin && (
@@ -310,6 +316,20 @@ export default function Products() {
                             <div>
                                 <label className="block text-sm font-extrabold text-slate-800 mb-2">وصف (اختياري)</label>
                                 <textarea name="description" defaultValue={editingProduct?.description} className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-purple-100 focus:border-purple-600 outline-none transition-all h-20 resize-none" placeholder="وصف بسيط للمنتج"></textarea>
+                            </div>
+
+                            {/* فترة الضمان الافتراضية */}
+                            <div className="bg-gradient-to-r from-amber-50 to-orange-50 p-5 rounded-2xl border border-amber-200 space-y-3">
+                                <div className="text-xs font-black text-amber-700 uppercase tracking-widest flex items-center gap-1.5">
+                                    <i className="fa-solid fa-shield-halved"></i> فترة الضمان الافتراضية
+                                </div>
+                                <div className="grid grid-cols-4 gap-2 mb-2">
+                                    {[{l:'بدون',v:0},{l:'شهر',v:30},{l:'3 شهور',v:90},{l:'4 شهور',v:120},{l:'6 شهور',v:180},{l:'9 شهور',v:270},{l:'سنة',v:365},{l:'سنتين',v:730}].map(d => (
+                                        <button key={d.v} type="button" onClick={(e) => { e.target.closest('form').querySelector('[name=defaultWarranty]').value = d.v; }} className="py-2 px-1 rounded-xl border-2 border-amber-200 text-xs font-bold text-amber-700 hover:border-amber-400 hover:bg-amber-100 transition-all">{d.l}</button>
+                                    ))}
+                                </div>
+                                <input name="defaultWarranty" type="number" defaultValue={editingProduct?.default_warranty || 0} className="w-full bg-white border-2 border-amber-300 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-amber-100 focus:border-amber-500 outline-none transition-all text-amber-700" placeholder="0" min="0" />
+                                <p className="text-[10px] text-amber-600 font-medium"><i className="fa-solid fa-info-circle ml-1"></i> فترة الضمان الافتراضية بالأيام — العميل ممكن يزودها برسوم إضافية عند البيع</p>
                             </div>
 
                             {/* ربط بالمخزون */}

@@ -192,7 +192,7 @@ export default function Sales() {
         const originalPrice = product ? product.price : 0;
         const discount = Number(formData.get('discount') || 0);
         const warrantyFee = Number(formData.get('warrantyFee') || 0);
-        const warrantyDays = Number(formData.get('warrantyDays') || 0);
+        const extraWarrantyDays = Number(formData.get('extraWarrantyDays') || 0);
         const finalPrice = Math.max(0, originalPrice + warrantyFee - discount);
         const isPaid = formData.get('isPaid') === 'on';
         const walletId = formData.get('walletId') || '';
@@ -208,22 +208,27 @@ export default function Sales() {
         // اسم المحفظة
         const wallet = walletId ? wallets.find(w => String(w.id) === String(walletId)) : null;
 
-        // مدة الاشتراك من المنتج + أيام الضمان الإضافية
+        // مدة الاشتراك (منفصلة عن الضمان)
         const productDuration = product ? (product.duration || 30) : 30;
-        const totalDuration = productDuration + warrantyDays;
         
-        // تاريخ البيع - لو المستخدم اختار تاريخ قديم يستخدمه، غير كده تاريخ اليوم
+        // فترة الضمان = الافتراضية من المنتج + الإضافية من العميل
+        const defaultWarranty = product ? (product.default_warranty || 0) : 0;
+        const totalWarrantyDays = defaultWarranty + extraWarrantyDays;
+        
+        // تاريخ البيع
         const customDateStr = formData.get('saleDate');
         let saleDate;
         if (editingSale) {
             saleDate = editingSale.date || new Date().toISOString();
         } else if (customDateStr) {
-            // المستخدم اختار تاريخ محدد
             saleDate = new Date(customDateStr).toISOString();
         } else {
             saleDate = new Date().toISOString();
         }
-        const expiryDate = new Date(new Date(saleDate).getTime() + totalDuration * 86400000).toISOString();
+        // تاريخ انتهاء الاشتراك
+        const expiryDate = new Date(new Date(saleDate).getTime() + productDuration * 86400000).toISOString();
+        // تاريخ انتهاء الضمان
+        const warrantyExpiry = totalWarrantyDays > 0 ? new Date(new Date(saleDate).getTime() + totalWarrantyDays * 86400000).toISOString() : null;
 
         // Customer handling
         const customerName = formData.get('customerName') || '';
@@ -246,19 +251,22 @@ export default function Sales() {
                 await customersAPI.updateLastOrder(customerId, customerEmail);
             }
 
-            // ملاحظات الضمان الإضافي
+            // ملاحظات الضمان
             let userNotes = formData.get('notes') || '';
-            if (warrantyFee > 0) {
-                const warrantyNote = `[ضمان إضافي: +${warrantyFee} ج.م / +${warrantyDays} يوم]`;
+            if (warrantyFee > 0 || extraWarrantyDays > 0) {
+                const warrantyNote = `[ضمان: ${totalWarrantyDays} يوم${warrantyFee > 0 ? ` | رسوم إضافية: +${warrantyFee} ج.م` : ''}]`;
                 userNotes = warrantyNote + (userNotes ? ' — ' + userNotes : '');
             }
 
             const data = {
                 productName,
-                originalPrice: originalPrice + warrantyFee,
+                originalPrice,
                 discount,
+                warrantyFee,
                 finalPrice,
-                duration: totalDuration,
+                duration: productDuration,
+                warrantyDays: totalWarrantyDays,
+                warrantyExpiry,
                 expiryDate,
                 date: saleDate,
                 customerId: customerId || '',
@@ -712,6 +720,17 @@ export default function Sales() {
                                             {sale.paymentMethod && <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded text-[10px] font-bold"><i className="fa-solid fa-wallet text-[8px]"></i>{sale.paymentMethod}</span>}
                                             {sale.fromInventory && sale.assignedAccountEmail && <button onClick={() => showAccountDetails(sale)} className="inline-flex items-center gap-1 bg-purple-50 text-purple-700 px-2 py-0.5 rounded text-[10px] font-bold hover:bg-purple-100 transition"><i className="fa-solid fa-server text-[8px]"></i>{sale.assignedAccountEmail}</button>}
                                             {sale.duration && <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-[10px] font-bold"><i className="fa-solid fa-hourglass-half text-[8px]"></i>{sale.duration}ي</span>}
+                                            {sale.warrantyDays > 0 && (() => {
+                                                const wDaysLeft = sale.warrantyExpiry ? Math.ceil((new Date(sale.warrantyExpiry) - new Date()) / 86400000) : null;
+                                                const wExpired = wDaysLeft !== null && wDaysLeft <= 0;
+                                                return (
+                                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${wExpired ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-700'}`}>
+                                                        <i className="fa-solid fa-shield-halved text-[8px]"></i>
+                                                        {wExpired ? `ضمان منتهي` : `ضمان ${wDaysLeft}ي`}
+                                                        {sale.warrantyFee > 0 && <span className="text-[8px] opacity-70">(+{sale.warrantyFee})</span>}
+                                                    </span>
+                                                );
+                                            })()}
                                             {daysLeft !== null && <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${isExpired ? 'bg-red-100 text-red-700' : isSoon ? 'bg-orange-100 text-orange-700' : 'bg-teal-50 text-teal-700'}`}><i className={`fa-solid text-[8px] ${isExpired ? 'fa-triangle-exclamation' : 'fa-clock'}`}></i>{isExpired ? `منتهي ${Math.abs(daysLeft)}ي` : `${daysLeft}ي`}</span>}
                                             {sale.saleType === 'workspace' && sale.workspaceEmail && <span className="inline-flex items-center gap-1 bg-cyan-50 text-cyan-700 px-2 py-0.5 rounded text-[10px] font-bold"><i className="fa-solid fa-users text-[8px]"></i>{sale.workspaceEmail}</span>}
                                         </div>
@@ -895,23 +914,35 @@ export default function Sales() {
                                 <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
                                     <div className="text-xs font-black text-indigo-600 uppercase tracking-widest mb-2"><i className="fa-solid fa-wallet ml-1"></i> الدفع والخصم</div>
                                     
-                                    {/* رسوم ضمان إضافية */}
+                                    {/* رسوم ضمان إضافي */}
                                     <div className="bg-gradient-to-r from-amber-50 to-orange-50 p-4 rounded-xl border border-amber-200 space-y-3">
-                                        <div className="flex items-center gap-2 text-xs font-black text-amber-700">
-                                            <i className="fa-solid fa-shield-halved"></i>
-                                            ضمان إضافي (اختياري)
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2 text-xs font-black text-amber-700">
+                                                <i className="fa-solid fa-shield-halved"></i>
+                                                زيادة فترة الضمان (اختياري)
+                                            </div>
+                                            {(() => {
+                                                const selProductName = formRef.current?.querySelector('[name=productName]')?.value;
+                                                const selProduct = products.find(p => p.name === selProductName);
+                                                const defW = selProduct?.default_warranty || 0;
+                                                return defW > 0 ? (
+                                                    <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-2 py-0.5 rounded-lg">
+                                                        الضمان الافتراضي: {defW} يوم
+                                                    </span>
+                                                ) : null;
+                                            })()}
                                         </div>
                                         <div className="grid grid-cols-2 gap-3">
                                             <div>
-                                                <label className="block text-xs font-bold text-amber-700 mb-1">رسوم إضافية (ج.م)</label>
-                                                <input name="warrantyFee" type="number" defaultValue={0} className="w-full bg-white border-2 border-amber-300 rounded-xl p-3 font-bold text-sm focus:ring-4 focus:ring-amber-100 focus:border-amber-500 outline-none transition-all text-amber-700" placeholder="0" min="0" />
+                                                <label className="block text-xs font-bold text-amber-700 mb-1">رسوم الزيادة (ج.م)</label>
+                                                <input name="warrantyFee" type="number" defaultValue={editingSale?.warrantyFee || 0} className="w-full bg-white border-2 border-amber-300 rounded-xl p-3 font-bold text-sm focus:ring-4 focus:ring-amber-100 focus:border-amber-500 outline-none transition-all text-amber-700" placeholder="0" min="0" />
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-bold text-amber-700 mb-1">أيام ضمان إضافية</label>
-                                                <input name="warrantyDays" type="number" defaultValue={0} className="w-full bg-white border-2 border-amber-300 rounded-xl p-3 font-bold text-sm focus:ring-4 focus:ring-amber-100 focus:border-amber-500 outline-none transition-all text-amber-700" placeholder="0" min="0" />
+                                                <input name="extraWarrantyDays" type="number" defaultValue={0} className="w-full bg-white border-2 border-amber-300 rounded-xl p-3 font-bold text-sm focus:ring-4 focus:ring-amber-100 focus:border-amber-500 outline-none transition-all text-amber-700" placeholder="0" min="0" />
                                             </div>
                                         </div>
-                                        <p className="text-[10px] text-amber-600 font-medium"><i className="fa-solid fa-info-circle ml-1"></i> الرسوم هتتضاف على سعر المنتج والأيام هتتضاف على مدة الاشتراك</p>
+                                        <p className="text-[10px] text-amber-600 font-medium"><i className="fa-solid fa-info-circle ml-1"></i> الرسوم هتتضاف على سعر المنتج. الأيام هتتضاف على فترة الضمان الافتراضية (مش الاشتراك)</p>
                                     </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
