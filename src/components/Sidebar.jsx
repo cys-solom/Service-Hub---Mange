@@ -167,6 +167,13 @@ export default function Sidebar ({ isOpen, onClose }) {
                         </button>
                     )}
 
+                    {(hasPermission('all') || user.role === 'admin') && (
+                        <button onClick={() => { setActiveTab('auditLog'); onClose(); }} className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'auditLog' ? 'bg-slate-600 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white font-medium'}`}>
+                            <i className="fa-solid fa-clock-rotate-left w-5 text-center"></i>
+                            <span className="text-sm">سجل العمليات</span>
+                        </button>
+                    )}
+
                     {/* ===== QUICK PULL SECTION ===== */}
                     {hasPermission('accounts') && sections && sections.length > 0 && (
                         <div className="mt-3 pt-3 border-t border-slate-800">

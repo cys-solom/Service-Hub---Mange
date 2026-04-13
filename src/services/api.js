@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import telegram from './telegram';
+import auditLog from './auditLog';
 
 // ==========================================
 // API Service - Replaces all localStorage ops
@@ -42,18 +43,16 @@ export const authAPI = {
         const token = crypto.randomUUID() + '-' + Date.now();
         await supabase.from('users').update({ token }).eq('id', data.id);
 
-        return {
-            status: 'success',
-            token,
-            user: {
-                id: data.id,
-                username: data.username,
-                role: data.role,
-                permissions: data.permissions || [],
-                base_salary: data.base_salary,
-                vodafone_cash: data.vodafone_cash
-            }
+        const userObj = {
+            id: data.id,
+            username: data.username,
+            role: data.role,
+            permissions: data.permissions || [],
+            base_salary: data.base_salary,
+            vodafone_cash: data.vodafone_cash
         };
+        auditLog.log('login', `تسجيل دخول: ${data.username}`, { role: data.role });
+        return { status: 'success', token, user: userObj };
     },
 
     async checkAuth(token) {
@@ -76,6 +75,7 @@ export const authAPI = {
 
     async logout(token) {
         if (!token) return;
+        auditLog.log('logout', 'تسجيل خروج');
         await supabase.from('users').update({ token: null }).eq('token', token);
     }
 };
@@ -105,6 +105,7 @@ export const productsAPI = {
         };
         const { error } = await supabase.from('products').insert(row);
         if (error) throw error;
+        auditLog.log('product_create', `إضافة منتج: ${product.name}`, { id, price: product.price });
         return id;
     },
 
@@ -120,6 +121,7 @@ export const productsAPI = {
         };
         const { error } = await supabase.from('products').update(updates).eq('id', id);
         if (error) throw error;
+        auditLog.log('product_update', `تعديل منتج: ${product.name}`, { id, price: product.price });
     },
 
     async updateSortOrder(items) {
@@ -137,6 +139,7 @@ export const productsAPI = {
     async delete(id) {
         const { error } = await supabase.from('products').delete().eq('id', id);
         if (error) throw error;
+        auditLog.log('product_delete', `حذف منتج: ${id}`, { id });
     },
 
     // Sync name changes across related tables
@@ -209,6 +212,7 @@ export const accountsAPI = {
         }).select().single();
         if (error) throw error;
         telegram.stockAdded(account.productName, 1, account.isWorkspace ? 'accounts' : 'accounts');
+        auditLog.log('stock_add', `إضافة حساب في ${account.productName}: ${account.email}`, { section: account.productName, email: account.email });
         return data;
     },
 
@@ -229,6 +233,7 @@ export const accountsAPI = {
         const { error } = await supabase.from('accounts').insert(rows);
         if (error) throw error;
         telegram.stockAdded(accounts[0]?.productName || 'غير محدد', rows.length);
+        auditLog.log('stock_add', `إضافة ${rows.length} حساب في ${accounts[0]?.productName || 'غير محدد'}`, { section: accounts[0]?.productName, count: rows.length });
     },
 
     async update(id, updates) {
@@ -250,6 +255,7 @@ export const accountsAPI = {
 
     async delete(id) {
         await supabase.from('accounts').delete().eq('id', id);
+        auditLog.log('stock_delete', `حذف حساب من المخزون: ${id}`, { id });
     },
 
     async pullNext(sectionName) {
@@ -284,6 +290,7 @@ export const accountsAPI = {
             twoFA: target.two_fa,
         };
         telegram.inventoryPulled(sectionName, target.email);
+        auditLog.log('stock_pull', `سحب من ${sectionName}: ${target.email}`, { section: sectionName, email: target.email });
         return result;
     }
 };
@@ -407,6 +414,7 @@ export const salesAPI = {
         const { data, error } = await supabase.from('sales').insert(insertData).select().single();
         if (error) throw error;
         telegram.newSale(sale);
+        auditLog.log('sale_create', `بيعة جديدة: ${sale.customerName || sale.customerEmail} - ${sale.productName} (${sale.finalPrice} EGP)`, { product: sale.productName, customer: sale.customerName, price: sale.finalPrice });
         return data;
     },
 
@@ -435,10 +443,12 @@ export const salesAPI = {
             customer_password: sale.customerPassword || '',
         }).eq('id', id);
         if (error) throw error;
+        auditLog.log('sale_update', `تعديل بيعة: ${sale.customerName || sale.customerEmail} - ${sale.productName}`, { id, product: sale.productName });
     },
 
     async delete(id) {
         await supabase.from('sales').delete().eq('id', id);
+        auditLog.log('sale_delete', `حذف بيعة: ${id}`, { id });
     },
 
     async togglePaid(id, isPaid, finalPrice, saleInfo) {
@@ -447,6 +457,7 @@ export const salesAPI = {
             remaining_amount: isPaid ? 0 : finalPrice
         }).eq('id', id);
         if (isPaid && saleInfo) telegram.debtPaid(saleInfo);
+        auditLog.log('sale_pay', `${isPaid ? 'تأكيد دفع' : 'إلغاء دفع'}: ${saleInfo?.customerName || id}`, { id, isPaid });
     },
 
     async toggleActivated(id, isActivated, saleInfo) {
@@ -454,6 +465,7 @@ export const salesAPI = {
             is_activated: isActivated,
         }).eq('id', id);
         if (isActivated && saleInfo) telegram.saleActivated(saleInfo);
+        auditLog.log('sale_activate', `${isActivated ? 'تفعيل' : 'إلغاء تفعيل'}: ${saleInfo?.customerName || id}`, { id, isActivated });
     }
 };
 
@@ -483,6 +495,7 @@ export const expensesAPI = {
             expense_category: expense.expenseCategory || 'daily',
         }).select().single();
         if (error) throw error;
+        auditLog.log('expense_create', `مصروف جديد: ${expense.description || expense.type} (${expense.amount} EGP)`, { type: expense.type, amount: expense.amount });
         return data;
     },
 

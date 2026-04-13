@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { DataProvider, useData } from './context/DataContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ConfirmProvider } from './components/ConfirmDialog';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
+import telegram from './services/telegram';
 
 import Dashboard from './components/Dashboard';
 import Sales from './components/Sales';
@@ -19,6 +20,7 @@ import Users from './components/Users';
 import Products from './components/Products';
 import BotSettings from './components/BotSettings';
 import Employees from './components/Employees';
+import AuditLog from './components/AuditLog';
 
 const MainLayout = () => {
   const { user } = useAuth();
@@ -27,6 +29,14 @@ const MainLayout = () => {
   const checkPerm = (perm) => authPermission ? authPermission(perm) : true;
 
   const [isSidebarOpen, setSidebarOpen] = useState(false);
+
+  // Auto daily report scheduler - starts when user is logged in
+  useEffect(() => {
+    if (user) {
+      telegram.startAutoReport();
+      return () => telegram.stopAutoReport();
+    }
+  }, [user]);
 
   if (!user) return <Login />;
 
@@ -64,6 +74,7 @@ const MainLayout = () => {
           {activeTab === 'users' && (checkPerm('all') || user.role === 'admin') && <Users />}
           {activeTab === 'botSettings' && (checkPerm('botSettings') || checkPerm('all') || user.role === 'admin') && <BotSettings />}
           {activeTab === 'employees' && (checkPerm('employees') || checkPerm('all') || user.role === 'admin') && <Employees />}
+          {activeTab === 'auditLog' && (checkPerm('all') || user.role === 'admin') && <AuditLog />}
 
         </div>
       </main>

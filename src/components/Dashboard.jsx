@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useMemo, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 
@@ -107,6 +107,74 @@ export default function Dashboard() {
         return Object.entries(map).sort((a, b) => b[1].revenue - a[1].revenue);
     }, [sales]);
 
+    // ==========================================
+    // 📊 بيانات مبسّطة للتحليلات
+    // ==========================================
+
+    // مقارنة شهر بشهر
+    const monthComparison = useMemo(() => {
+        const now = new Date();
+        const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+
+        const thisMonthSales = sales.filter(s => new Date(s.date) >= thisMonthStart);
+        const lastMonthSales = sales.filter(s => {
+            const d = new Date(s.date);
+            return d >= lastMonthStart && d <= lastMonthEnd;
+        });
+
+        const thisRevenue = thisMonthSales.reduce((sum, s) => sum + (Number(s.finalPrice) || 0), 0);
+        const lastRevenue = lastMonthSales.reduce((sum, s) => sum + (Number(s.finalPrice) || 0), 0);
+        const thisCount = thisMonthSales.length;
+        const lastCount = lastMonthSales.length;
+
+        const revenueGrowth = lastRevenue > 0 ? ((thisRevenue - lastRevenue) / lastRevenue * 100) : (thisRevenue > 0 ? 100 : 0);
+        const countGrowth = lastCount > 0 ? ((thisCount - lastCount) / lastCount * 100) : (thisCount > 0 ? 100 : 0);
+
+        const thisMonthName = thisMonthStart.toLocaleDateString('ar-EG', { month: 'long' });
+        const lastMonthName = lastMonthStart.toLocaleDateString('ar-EG', { month: 'long' });
+
+        return { thisRevenue, lastRevenue, thisCount, lastCount, revenueGrowth, countGrowth, thisMonthName, lastMonthName };
+    }, [sales]);
+
+    // تحليل أيام الأسبوع
+    const weekdayData = useMemo(() => {
+        const dayNames = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+        const dayCount = [0, 0, 0, 0, 0, 0, 0];
+        const dayRevenue = [0, 0, 0, 0, 0, 0, 0];
+
+        sales.forEach(s => {
+            const dayIdx = new Date(s.date).getDay();
+            dayCount[dayIdx]++;
+            dayRevenue[dayIdx] += Number(s.finalPrice) || 0;
+        });
+
+        const maxCount = Math.max(...dayCount, 1);
+        const bestDay = dayCount.indexOf(Math.max(...dayCount));
+
+        return { dayNames, dayCount, dayRevenue, maxCount, bestDay, bestDayName: dayNames[bestDay], bestDayCount: dayCount[bestDay] };
+    }, [sales]);
+
+    // آخر 7 أيام
+    const last7Days = useMemo(() => {
+        const days = [];
+        const now = new Date();
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+            const dayStr = d.toISOString().split('T')[0];
+            const daySales = sales.filter(s => s.date && s.date.startsWith(dayStr));
+            const revenue = daySales.reduce((sum, s) => sum + (Number(s.finalPrice) || 0), 0);
+            days.push({
+                label: d.toLocaleDateString('ar-EG', { weekday: 'short', day: 'numeric' }),
+                count: daySales.length,
+                revenue,
+            });
+        }
+        const maxRev = Math.max(...days.map(d => d.revenue), 1);
+        return { days, maxRev };
+    }, [sales]);
+
     return (
         <div className="space-y-8 animate-fade-in pb-10">
 
@@ -159,6 +227,95 @@ export default function Dashboard() {
                 <StatCard title="قناة التواصل الأولى" engTitle="Top Channel" value={stats.topChannel} subTitle={`${stats.topChannelCount} عميل`} gradient="bg-gradient-to-br from-blue-500 to-indigo-600" icon="fa-comments" />
                 <StatCard title="نسبة التحصيل" engTitle="Collection Rate" value={`${stats.totalSales > 0 ? ((stats.paidCount / stats.totalSales) * 100).toFixed(0) : 0}%`} subTitle={`${stats.paidCount} مدفوع / ${stats.unpaidCount} معلق`} gradient="bg-gradient-to-br from-teal-500 to-cyan-700" icon="fa-chart-pie" />
             </div>
+
+            {/* ==========================================
+                📊 تحليلات بسيطة وواضحة
+               ========================================== */}
+            {canViewDailyProfit && sales.length > 0 && (
+                <>
+                    {/* --- معدل النمو (شهر بشهر) --- */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        {/* نمو الإيرادات */}
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 relative overflow-hidden">
+                            <div className={`absolute top-0 left-0 w-full h-1.5 ${monthComparison.revenueGrowth >= 0 ? 'bg-gradient-to-r from-emerald-400 to-green-500' : 'bg-gradient-to-r from-red-400 to-rose-500'}`}></div>
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="font-extrabold text-sm text-slate-800 flex items-center gap-2">
+                                    <i className={`fa-solid ${monthComparison.revenueGrowth >= 0 ? 'fa-arrow-trend-up text-emerald-500' : 'fa-arrow-trend-down text-red-500'}`}></i>
+                                    نمو الإيرادات
+                                </h3>
+                                <span className={`text-2xl font-black ${monthComparison.revenueGrowth >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                    {monthComparison.revenueGrowth >= 0 ? '+' : ''}{monthComparison.revenueGrowth.toFixed(1)}%
+                                </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="bg-indigo-50 rounded-xl p-3 border border-indigo-100">
+                                    <p className="text-[10px] font-bold text-indigo-400 mb-1">{monthComparison.thisMonthName} (الحالي)</p>
+                                    <p className="text-lg font-black text-indigo-700">{monthComparison.thisRevenue.toLocaleString()} <span className="text-xs">EGP</span></p>
+                                    <p className="text-[10px] font-bold text-indigo-400">{monthComparison.thisCount} أوردر</p>
+                                </div>
+                                <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                                    <p className="text-[10px] font-bold text-slate-400 mb-1">{monthComparison.lastMonthName} (السابق)</p>
+                                    <p className="text-lg font-black text-slate-600">{monthComparison.lastRevenue.toLocaleString()} <span className="text-xs">EGP</span></p>
+                                    <p className="text-[10px] font-bold text-slate-400">{monthComparison.lastCount} أوردر</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* آخر 7 أيام */}
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
+                            <h3 className="font-extrabold text-sm text-slate-800 flex items-center gap-2 mb-4">
+                                <i className="fa-solid fa-calendar-week text-indigo-500"></i>
+                                آخر 7 أيام
+                            </h3>
+                            <div className="flex items-end gap-2 h-28">
+                                {last7Days.days.map((day, i) => (
+                                    <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                                        <span className="text-[9px] font-black text-slate-600">{day.count}</span>
+                                        <div className="w-full bg-slate-100 rounded-t-lg relative overflow-hidden" style={{ height: '80px' }}>
+                                            <div
+                                                className={`absolute bottom-0 w-full rounded-t-lg transition-all duration-500 ${i === last7Days.days.length - 1 ? 'bg-indigo-500' : 'bg-indigo-200'}`}
+                                                style={{ height: `${Math.max((day.revenue / last7Days.maxRev) * 100, 4)}%` }}
+                                            ></div>
+                                        </div>
+                                        <span className="text-[8px] font-bold text-slate-400 leading-tight text-center">{day.label}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* --- أكتر يوم في الأسبوع --- */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 relative overflow-hidden">
+                        <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-purple-500 to-pink-500"></div>
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-extrabold text-sm text-slate-800 flex items-center gap-2">
+                                <i className="fa-solid fa-fire text-orange-500"></i>
+                                تحليل أيام الأسبوع
+                            </h3>
+                            <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-lg border border-indigo-100">
+                                أنشط يوم: {weekdayData.bestDayName} ({weekdayData.bestDayCount} مبيعة)
+                            </span>
+                        </div>
+                        <div className="grid grid-cols-7 gap-3">
+                            {weekdayData.dayNames.map((name, i) => {
+                                const isBest = i === weekdayData.bestDay && weekdayData.bestDayCount > 0;
+                                const pct = (weekdayData.dayCount[i] / weekdayData.maxCount) * 100;
+                                return (
+                                    <div key={name} className={`rounded-xl p-3 text-center transition-all ${isBest ? 'bg-indigo-50 border-2 border-indigo-300 shadow-sm' : 'bg-slate-50 border border-slate-100'}`}>
+                                        <p className={`text-xs font-bold mb-2 ${isBest ? 'text-indigo-700' : 'text-slate-500'}`}>{name}</p>
+                                        <p className={`text-xl font-black mb-2 ${isBest ? 'text-indigo-700' : 'text-slate-800'}`}>{weekdayData.dayCount[i]}</p>
+                                        <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                                            <div className={`h-full rounded-full transition-all duration-700 ${isBest ? 'bg-indigo-500' : 'bg-slate-400'}`} style={{ width: `${pct}%` }}></div>
+                                        </div>
+                                        <p className="text-[9px] font-bold text-slate-400 mt-1.5">{weekdayData.dayRevenue[i].toLocaleString()} ج.م</p>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </>
+            )}
 
             {/* --- مبيعات حسب المنتج + آخر المبيعات --- */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -237,6 +394,10 @@ export default function Dashboard() {
         </div>
     );
 }
+
+// ==========================================
+// Sub-Components
+// ==========================================
 
 const StatCard = ({ title, engTitle, value, subTitle, gradient, icon }) => (
     <div className={`p-6 rounded-2xl text-white shadow-lg shadow-indigo-100 relative overflow-hidden ${gradient} transition transform hover:-translate-y-1 hover:shadow-xl group min-h-[150px] flex flex-col justify-between border border-white/10`}>

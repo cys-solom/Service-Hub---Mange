@@ -191,7 +191,9 @@ export default function Sales() {
         const product = products.find(p => p.name === productName);
         const originalPrice = product ? product.price : 0;
         const discount = Number(formData.get('discount') || 0);
-        const finalPrice = Math.max(0, originalPrice - discount);
+        const warrantyFee = Number(formData.get('warrantyFee') || 0);
+        const warrantyDays = Number(formData.get('warrantyDays') || 0);
+        const finalPrice = Math.max(0, originalPrice + warrantyFee - discount);
         const isPaid = formData.get('isPaid') === 'on';
         const walletId = formData.get('walletId') || '';
         const remainingAmount = Number(formData.get('remainingAmount') || 0);
@@ -206,8 +208,9 @@ export default function Sales() {
         // اسم المحفظة
         const wallet = walletId ? wallets.find(w => String(w.id) === String(walletId)) : null;
 
-        // مدة الاشتراك من المنتج
+        // مدة الاشتراك من المنتج + أيام الضمان الإضافية
         const productDuration = product ? (product.duration || 30) : 30;
+        const totalDuration = productDuration + warrantyDays;
         
         // تاريخ البيع - لو المستخدم اختار تاريخ قديم يستخدمه، غير كده تاريخ اليوم
         const customDateStr = formData.get('saleDate');
@@ -220,7 +223,7 @@ export default function Sales() {
         } else {
             saleDate = new Date().toISOString();
         }
-        const expiryDate = new Date(new Date(saleDate).getTime() + productDuration * 86400000).toISOString();
+        const expiryDate = new Date(new Date(saleDate).getTime() + totalDuration * 86400000).toISOString();
 
         // Customer handling
         const customerName = formData.get('customerName') || '';
@@ -243,12 +246,19 @@ export default function Sales() {
                 await customersAPI.updateLastOrder(customerId, customerEmail);
             }
 
+            // ملاحظات الضمان الإضافي
+            let userNotes = formData.get('notes') || '';
+            if (warrantyFee > 0) {
+                const warrantyNote = `[ضمان إضافي: +${warrantyFee} ج.م / +${warrantyDays} يوم]`;
+                userNotes = warrantyNote + (userNotes ? ' — ' + userNotes : '');
+            }
+
             const data = {
                 productName,
-                originalPrice,
+                originalPrice: originalPrice + warrantyFee,
                 discount,
                 finalPrice,
-                duration: productDuration,
+                duration: totalDuration,
                 expiryDate,
                 date: saleDate,
                 customerId: customerId || '',
@@ -261,7 +271,7 @@ export default function Sales() {
                 paymentMethod: wallet ? wallet.name : (formData.get('paymentMethod') || ''),
                 walletId: walletId,
                 walletName: wallet ? wallet.name : '',
-                notes: formData.get('notes') || '',
+                notes: userNotes,
                 moderator: user?.username || 'Admin',
                 fromInventory: false,
                 assignedAccountEmail: '',
@@ -281,6 +291,54 @@ export default function Sales() {
                 data.workspaceEmail = saleType === 'workspace' ? workspaceEmail : '';
                 data.isActivated = editingSale.isActivated;
                 data.customerPassword = formData.get('customerPassword')?.trim() || '';
+
+                // === تحديث المحفظة عند التعديل ===
+                // حساب المبلغ المدفوع القديم
+                const oldFinalPrice = Number(editingSale.finalPrice) || 0;
+                const oldRemaining = Number(editingSale.remainingAmount) || 0;
+                const oldPaid = editingSale.isPaid ? oldFinalPrice : (oldFinalPrice - oldRemaining);
+
+                // حساب المبلغ المدفوع الجديد
+                const newPaid = isPaid ? finalPrice : (finalPrice - (Number(data.remainingAmount) || 0));
+
+                // الفرق بين القديم والجديد
+                const diff = newPaid - oldPaid;
+
+                // لو المحفظة الحالية هي نفس المحفظة القديمة — إيداع/سحب الفرق
+                const currentWalletId = walletId || editingSale.walletId;
+                if (currentWalletId && Math.abs(diff) >= 0.01) {
+                    if (diff > 0) {
+                        // العميل دفع أكتر — إيداع الفرق
+                        await depositToWallet(currentWalletId, diff, `تعديل بيع — دفعة إضافية ${productName} — ${data.customerEmail}`);
+                    } else {
+                        // تقليل المبلغ — سحب الفرق
+                        await walletsAPI.withdraw(
+                            currentWalletId,
+                            Math.abs(diff),
+                            `تعديل بيع — استرداد جزئي ${productName} — ${data.customerEmail}`,
+                            'تعديل مبيعة',
+                            user?.username || 'System'
+                        );
+                    }
+                }
+                // لو اتغيرت المحفظة — إيداع المبلغ الجديد في المحفظة الجديدة وسحب القديم
+                if (walletId && editingSale.walletId && walletId !== editingSale.walletId) {
+                    // سحب من المحفظة القديمة
+                    if (oldPaid > 0) {
+                        await walletsAPI.withdraw(
+                            editingSale.walletId,
+                            oldPaid,
+                            `نقل بيع لمحفظة أخرى ${productName}`,
+                            'نقل محفظة',
+                            user?.username || 'System'
+                        );
+                    }
+                    // إيداع في المحفظة الجديدة
+                    if (newPaid > 0) {
+                        await depositToWallet(walletId, newPaid, `نقل بيع من محفظة أخرى ${productName} — ${data.customerEmail}`);
+                    }
+                }
+
                 await salesAPI.update(editingSale.id, data);
             } else {
                 // سحب من المخزون لو المنتج مربوط بالمخزون ونوعه from_stock
@@ -836,6 +894,26 @@ export default function Sales() {
                                 {/* الدفع */}
                                 <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
                                     <div className="text-xs font-black text-indigo-600 uppercase tracking-widest mb-2"><i className="fa-solid fa-wallet ml-1"></i> الدفع والخصم</div>
+                                    
+                                    {/* رسوم ضمان إضافية */}
+                                    <div className="bg-gradient-to-r from-amber-50 to-orange-50 p-4 rounded-xl border border-amber-200 space-y-3">
+                                        <div className="flex items-center gap-2 text-xs font-black text-amber-700">
+                                            <i className="fa-solid fa-shield-halved"></i>
+                                            ضمان إضافي (اختياري)
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-xs font-bold text-amber-700 mb-1">رسوم إضافية (ج.م)</label>
+                                                <input name="warrantyFee" type="number" defaultValue={0} className="w-full bg-white border-2 border-amber-300 rounded-xl p-3 font-bold text-sm focus:ring-4 focus:ring-amber-100 focus:border-amber-500 outline-none transition-all text-amber-700" placeholder="0" min="0" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-amber-700 mb-1">أيام ضمان إضافية</label>
+                                                <input name="warrantyDays" type="number" defaultValue={0} className="w-full bg-white border-2 border-amber-300 rounded-xl p-3 font-bold text-sm focus:ring-4 focus:ring-amber-100 focus:border-amber-500 outline-none transition-all text-amber-700" placeholder="0" min="0" />
+                                            </div>
+                                        </div>
+                                        <p className="text-[10px] text-amber-600 font-medium"><i className="fa-solid fa-info-circle ml-1"></i> الرسوم هتتضاف على سعر المنتج والأيام هتتضاف على مدة الاشتراك</p>
+                                    </div>
+
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div>
                                             <label className="block text-sm font-extrabold text-slate-800 mb-2">قيمة الخصم (ج.م)</label>
