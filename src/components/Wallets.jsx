@@ -56,6 +56,9 @@ export default function Wallets() {
         const now = Date.now();
         if (!force && lastTimestamp && (now - lastTimestamp) < RATE_CACHE_DURATION) {
             setRateLastUpdate(new Date(lastTimestamp));
+            // Ensure the cached rate is synced globally even if we don't re-fetch from API
+            const cachedRate = getUsdRate();
+            if (cachedRate) globalConfigAPI.saveUsdRate(cachedRate).catch(() => {});
             return;
         }
         setRateLoading(true);
