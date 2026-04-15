@@ -296,12 +296,11 @@ export default function Accounts() {
             // Send telegram notification (same as pullNext)
             telegram.inventoryPulled(sectionName, acc.email);
 
-            // Auto-expense: read cost from localStorage
+            // Auto-expense: read cost from section data (synced from DB)
             try {
-                const costs = JSON.parse(localStorage.getItem('service_hub_section_costs') || '{}');
                 const sections = ctxSections || [];
                 const sec = sections.find(s => s.name === sectionName);
-                const costUSD = sec ? (costs[sec.id] || 0) : 0;
+                const costUSD = sec?.costPerItem || 0;
                 if (costUSD > 0) {
                     const usdRate = Number(localStorage.getItem('service_hub_usd_rate') || '50');
                     const amountEGP = Math.round(costUSD * usdRate * 100) / 100;

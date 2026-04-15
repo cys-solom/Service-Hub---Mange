@@ -153,14 +153,35 @@ export const productsAPI = {
 };
 
 // ============ INVENTORY SECTIONS ============
-const SECTION_COSTS_KEY = 'service_hub_section_costs'; // { sectionId: costUSD }
+const SECTION_COSTS_KEY = 'service_hub_section_costs'; // local cache
 
-const _getSectionCosts = () => {
+// Read costs: try Supabase app_settings first, fallback to localStorage
+const _getSectionCosts = async () => {
+    try {
+        const { data } = await supabase
+            .from('app_settings')
+            .select('value')
+            .eq('key', 'section_costs')
+            .single();
+        if (data?.value) {
+            const costs = JSON.parse(data.value);
+            // Sync to localStorage as cache
+            localStorage.setItem(SECTION_COSTS_KEY, data.value);
+            return costs;
+        }
+    } catch (e) { /* fallback to localStorage */ }
     try { return JSON.parse(localStorage.getItem(SECTION_COSTS_KEY) || '{}'); }
     catch { return {}; }
 };
-const _saveSectionCosts = (map) => {
-    localStorage.setItem(SECTION_COSTS_KEY, JSON.stringify(map));
+// Save costs: write to Supabase + localStorage
+const _saveSectionCosts = async (map) => {
+    const json = JSON.stringify(map);
+    localStorage.setItem(SECTION_COSTS_KEY, json);
+    try {
+        await supabase
+            .from('app_settings')
+            .upsert({ key: 'section_costs', value: json });
+    } catch (e) { console.warn('Failed to save costs to DB:', e); }
 };
 
 export const sectionsAPI = {
@@ -169,7 +190,7 @@ export const sectionsAPI = {
             .from('inventory_sections')
             .select('*')
             .order('created_at', { ascending: false });
-        const costs = _getSectionCosts();
+        const costs = await _getSectionCosts();
         return (data || []).map(s => ({
             ...s,
             costPerItem: costs[s.id] || 0,
@@ -184,11 +205,10 @@ export const sectionsAPI = {
             type: section.type || 'accounts',
         });
         if (error) throw error;
-        // Save cost in localStorage
         if (section.costPerItem > 0) {
-            const costs = _getSectionCosts();
+            const costs = await _getSectionCosts();
             costs[id] = Number(section.costPerItem);
-            _saveSectionCosts(costs);
+            await _saveSectionCosts(costs);
         }
         return id;
     },
@@ -197,26 +217,23 @@ export const sectionsAPI = {
         const row = {};
         if (updates.name !== undefined) row.name = updates.name;
         if (updates.type !== undefined) row.type = updates.type;
-        // Only send DB updates if there are DB fields to update
         if (Object.keys(row).length > 0) {
             const { error } = await supabase.from('inventory_sections').update(row).eq('id', id);
             if (error) throw error;
         }
-        // Save cost in localStorage
         if (updates.costPerItem !== undefined) {
-            const costs = _getSectionCosts();
+            const costs = await _getSectionCosts();
             costs[id] = Number(updates.costPerItem);
-            _saveSectionCosts(costs);
+            await _saveSectionCosts(costs);
         }
     },
 
     async delete(id, sectionName) {
         await supabase.from('accounts').delete().eq('product_name', sectionName);
         await supabase.from('inventory_sections').delete().eq('id', id);
-        // Clean up localStorage cost
-        const costs = _getSectionCosts();
+        const costs = await _getSectionCosts();
         delete costs[id];
-        _saveSectionCosts(costs);
+        await _saveSectionCosts(costs);
     }
 };
 
@@ -362,8 +379,8 @@ export const accountsAPI = {
                 autoExpenseDesc = `${linkedRec.label} — سحب: ${sectionName} - ${target.email}`;
                 autoExpenseType = linkedRec.type || 'تكلفة مخزون';
             } else {
-                // 2. Fallback to section cost from localStorage
-                const allCosts = _getSectionCosts();
+                // 2. Fallback to section cost from DB
+                const allCosts = await _getSectionCosts();
                 // Find section ID by name
                 const { data: secRow } = await supabase
                     .from('inventory_sections')
