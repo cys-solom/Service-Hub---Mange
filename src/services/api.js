@@ -171,7 +171,15 @@ const _getSectionCosts = async () => {
             return data.meta;
         }
     } catch (e) { /* fallback */ }
-    try { return JSON.parse(localStorage.getItem(SECTION_COSTS_KEY) || '{}'); }
+    
+    try { 
+        const local = JSON.parse(localStorage.getItem(SECTION_COSTS_KEY) || '{}'); 
+        // If DB is empty but we have local data, push it to DB
+        if (Object.keys(local).length > 0) {
+            _saveSectionCosts(local).catch(() => {});
+        }
+        return local;
+    }
     catch { return {}; }
 };
 // Save costs: write to DB (shared) + localStorage (cache)
