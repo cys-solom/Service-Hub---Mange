@@ -26,10 +26,12 @@ const ACTION_TYPES = {
     // Inventory
     stock_add:        { label: 'إضافة مخزون', icon: 'fa-boxes-stacked', color: 'teal', category: 'inventory' },
     stock_pull:       { label: 'سحب من المخزون', icon: 'fa-arrow-up-from-bracket', color: 'orange', category: 'inventory' },
+    stock_return:     { label: 'إرجاع مخزون', icon: 'fa-rotate-left', color: 'cyan', category: 'inventory' },
     stock_delete:     { label: 'حذف حساب', icon: 'fa-trash', color: 'red', category: 'inventory' },
 
     // Expenses
     expense_create:   { label: 'إضافة مصروف', icon: 'fa-receipt', color: 'amber', category: 'expenses' },
+    expense_update:   { label: 'تعديل مصروف', icon: 'fa-pen', color: 'blue', category: 'expenses' },
     expense_delete:   { label: 'حذف مصروف', icon: 'fa-trash', color: 'red', category: 'expenses' },
 
     // Wallets

@@ -22,7 +22,7 @@ const CURRENCIES = [
 export default function Wallets() {
     useEffect(() => { window.scrollTo(0, 0); }, []);
     const { user } = useAuth();
-    const { wallets: ctxWallets, transactions: ctxTransactions, refreshData } = useData();
+    const { wallets: ctxWallets, transactions: ctxTransactions, accounts: ctxAccounts, sections: ctxSections, refreshData } = useData();
 
     const [wallets, setWallets] = useState([]);
     const [transactions, setTransactions] = useState([]);
@@ -98,6 +98,35 @@ export default function Wallets() {
         });
         return { totalEGP: egp, totalUSD: usdRate > 0 ? egp / usdRate : 0 };
     }, [wallets, usdRate]);
+
+    // Frozen balance = cost per unit × available items count (in USD)
+    const frozenBalanceUSD = useMemo(() => {
+        if (!ctxAccounts || !ctxSections) return 0;
+
+        // Build cost map: section name → cost per unit (USD)
+        const sectionCostMap = {};
+        ctxSections.forEach(s => { sectionCostMap[s.name] = s.costPerItem || 0; });
+
+        // Count available items per section
+        const availableCount = {};
+        ctxAccounts.forEach(a => {
+            const name = a.productName || a.product_name;
+            if (a.status === 'available') {
+                availableCount[name] = (availableCount[name] || 0) + 1;
+            }
+        });
+
+        // Total = sum of (cost × available count) for each section
+        let total = 0;
+        Object.keys(sectionCostMap).forEach(name => {
+            const cost = sectionCostMap[name];
+            const count = availableCount[name] || 0;
+            if (cost > 0 && count > 0) {
+                total += cost * count;
+            }
+        });
+        return total;
+    }, [ctxAccounts, ctxSections]);
 
     const walletStats = useMemo(() => {
         const stats = {};
@@ -262,6 +291,28 @@ export default function Wallets() {
                                 </span>
                             )}
                         </div>
+                        {user?.role === 'admin' && frozenBalanceUSD > 0 && (
+                            <div className="bg-blue-500/20 backdrop-blur-sm rounded-2xl px-6 py-4 border border-blue-300/20">
+                                <p className="text-blue-100 text-xs font-bold mb-2 flex items-center gap-1.5"><i className="fa-solid fa-snowflake"></i> رصيد مجمد (استوك)</p>
+                                <div className="flex items-center gap-4">
+                                    <div>
+                                        <p className="text-2xl font-black tracking-tight dir-ltr">
+                                            <span className="text-sm font-bold ml-1 opacity-80">$</span>
+                                            {frozenBalanceUSD.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                        </p>
+                                    </div>
+                                    {usdRate > 0 && (
+                                        <div className="border-r border-white/20 pr-4">
+                                            <p className="text-lg font-black tracking-tight dir-ltr opacity-80">
+                                                <span className="text-xs font-bold ml-1 opacity-70">EGP</span>
+                                                {(frozenBalanceUSD * usdRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                                <p className="text-[9px] text-blue-200 opacity-70 mt-1">قيمة المخزون المتاح — يزيد بالإضافة ويقل بالسحب</p>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

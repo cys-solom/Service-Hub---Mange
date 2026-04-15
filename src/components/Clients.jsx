@@ -283,10 +283,8 @@ export default function Clients() {
                         <thead className="bg-slate-50 border-b border-slate-200">
                             <tr>
                                 <th className="text-right p-4 font-black text-slate-600 text-xs uppercase tracking-wider">العميل</th>
-                                <th className="text-right p-4 font-black text-slate-600 text-xs uppercase tracking-wider">ID</th>
                                 <th className="text-center p-4 font-black text-slate-600 text-xs uppercase tracking-wider">التواصل</th>
                                 <th className="text-center p-4 font-black text-slate-600 text-xs uppercase tracking-wider">الأوردرات</th>
-                                <th className="text-center p-4 font-black text-slate-600 text-xs uppercase tracking-wider">التجديدات</th>
                                 <th className="text-center p-4 font-black text-slate-600 text-xs uppercase tracking-wider">المنتجات</th>
                                 <th className="text-center p-4 font-black text-slate-600 text-xs uppercase tracking-wider">المدفوعات</th>
                                 <th className="text-center p-4 font-black text-slate-600 text-xs uppercase tracking-wider">الحالة</th>
@@ -296,7 +294,7 @@ export default function Clients() {
                         <tbody className="divide-y divide-slate-100">
                             {visibleClients.length === 0 ? (
                                 <tr>
-                                    <td colSpan="9" className="p-16 text-center text-slate-400">
+                                    <td colSpan="7" className="p-16 text-center text-slate-400">
                                         <i className="fa-solid fa-user-slash text-4xl mb-4 block opacity-30"></i>
                                         <p className="font-bold text-lg">{searchTerm ? 'لا يوجد عملاء يطابقوا البحث' : 'لا يوجد عملاء بعد'}</p>
                                         <p className="text-sm mt-1">{!searchTerm && 'سجل أوردر جديد من صفحة المبيعات لإضافة عميل'}</p>
@@ -309,7 +307,7 @@ export default function Clients() {
                                         <tr key={client.id}
                                             onClick={() => setSelectedClient(client)}
                                             className="hover:bg-indigo-50/40 cursor-pointer transition-colors group">
-                                            {/* Name + Phone */}
+                                            {/* Name + Phone + Email */}
                                             <td className="p-4">
                                                 <div className="flex items-center gap-3">
                                                     <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white flex items-center justify-center font-bold text-sm shadow-sm flex-shrink-0">
@@ -317,15 +315,16 @@ export default function Clients() {
                                                     </div>
                                                     <div className="min-w-0">
                                                         <p className="font-bold text-slate-800 truncate group-hover:text-indigo-700 transition-colors">{client.name}</p>
-                                                        {client.phone && (
-                                                            <p className="text-xs text-slate-400 font-mono dir-ltr text-right truncate">{client.phone}</p>
-                                                        )}
+                                                        <div className="flex items-center gap-2">
+                                                            {client.phone && (
+                                                                <p className="text-xs text-slate-400 font-mono dir-ltr text-right truncate">{client.phone}</p>
+                                                            )}
+                                                            {client.email && (
+                                                                <p className="text-[10px] text-indigo-400 font-mono truncate max-w-[150px]">{client.email}</p>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 </div>
-                                            </td>
-                                            {/* ID */}
-                                            <td className="p-4">
-                                                <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 py-1 rounded border border-slate-100 select-all">{client.id?.replace('CUS-', '#')}</span>
                                             </td>
                                             {/* Contact */}
                                             <td className="p-4 text-center">
@@ -334,15 +333,16 @@ export default function Clients() {
                                                     {client.contactChannel}
                                                 </span>
                                             </td>
-                                            {/* Orders */}
+                                            {/* Orders + Renewals */}
                                             <td className="p-4 text-center">
-                                                <span className="text-base font-black text-slate-700">{client.ordersCount}</span>
-                                            </td>
-                                            {/* Renewals */}
-                                            <td className="p-4 text-center">
-                                                <span className={`text-base font-black ${client.renewalCount > 0 ? 'text-emerald-600' : 'text-slate-300'}`}>
-                                                    {client.renewalCount}
-                                                </span>
+                                                <div className="flex items-center justify-center gap-2">
+                                                    <span className="text-base font-black text-slate-700">{client.ordersCount}</span>
+                                                    {client.renewalCount > 0 && (
+                                                        <span className="text-[10px] font-bold bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded border border-emerald-100">
+                                                            🔄 {client.renewalCount}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </td>
                                             {/* Products */}
                                             <td className="p-4 text-center">
@@ -517,13 +517,18 @@ export default function Clients() {
                             </div>
 
                             {/* Actions */}
-                            <div className="flex gap-3 pt-2">
+                            <div className="flex gap-3 pt-2 flex-wrap">
                                 <button onClick={() => setEditingClient(selectedClient)} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition flex items-center gap-2">
                                     <i className="fa-solid fa-pen"></i> تعديل بيانات العميل
                                 </button>
                                 <button onClick={() => { if (selectedClient.phone) copyToClipboard(selectedClient.phone); }} className="bg-white text-slate-600 px-5 py-3 rounded-xl font-bold border-2 border-slate-200 hover:bg-slate-50 transition flex items-center gap-2">
                                     <i className="fa-solid fa-copy"></i> نسخ الرقم
                                 </button>
+                                {selectedClient.email && (
+                                    <button onClick={() => copyToClipboard(selectedClient.email)} className="bg-white text-indigo-600 px-5 py-3 rounded-xl font-bold border-2 border-indigo-200 hover:bg-indigo-50 transition flex items-center gap-2">
+                                        <i className="fa-solid fa-envelope"></i> نسخ الإيميل
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </div>

@@ -33,8 +33,11 @@ const MainLayout = () => {
   // Auto daily report scheduler - starts when user is logged in
   useEffect(() => {
     if (user) {
+      telegram.setCurrentUser(user.username);
       telegram.startAutoReport();
       return () => telegram.stopAutoReport();
+    } else {
+      telegram.setCurrentUser('');
     }
   }, [user]);
 

@@ -36,5 +36,8 @@ stats.html
 *.dump
 coverage/
 
-# lock files (optional — remove this line if you want to commit package-lock.json)
+# lock files (optional)
 # package-lock.json
+
+# other projects
+Service-VIP/

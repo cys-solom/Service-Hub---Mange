@@ -1,41 +1,49 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import auditLog from '../services/auditLog';
 
 const { ACTION_TYPES, CATEGORIES } = auditLog;
 
-const colorClasses = {
-    indigo:  { bg: 'bg-indigo-50', text: 'text-indigo-600', border: 'border-indigo-200', dot: 'bg-indigo-500' },
-    blue:    { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-200', dot: 'bg-blue-500' },
-    emerald: { bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-200', dot: 'bg-emerald-500' },
-    green:   { bg: 'bg-green-50', text: 'text-green-600', border: 'border-green-200', dot: 'bg-green-500' },
-    red:     { bg: 'bg-red-50', text: 'text-red-600', border: 'border-red-200', dot: 'bg-red-500' },
-    purple:  { bg: 'bg-purple-50', text: 'text-purple-600', border: 'border-purple-200', dot: 'bg-purple-500' },
-    violet:  { bg: 'bg-violet-50', text: 'text-violet-600', border: 'border-violet-200', dot: 'bg-violet-500' },
-    amber:   { bg: 'bg-amber-50', text: 'text-amber-600', border: 'border-amber-200', dot: 'bg-amber-500' },
-    orange:  { bg: 'bg-orange-50', text: 'text-orange-600', border: 'border-orange-200', dot: 'bg-orange-500' },
-    cyan:    { bg: 'bg-cyan-50', text: 'text-cyan-600', border: 'border-cyan-200', dot: 'bg-cyan-500' },
-    teal:    { bg: 'bg-teal-50', text: 'text-teal-600', border: 'border-teal-200', dot: 'bg-teal-500' },
-    slate:   { bg: 'bg-slate-50', text: 'text-slate-600', border: 'border-slate-200', dot: 'bg-slate-500' },
+const colorMap = {
+    indigo: { bg: 'bg-indigo-50', text: 'text-indigo-600', border: 'border-indigo-200' },
+    blue: { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-200' },
+    emerald: { bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-200' },
+    green: { bg: 'bg-green-50', text: 'text-green-600', border: 'border-green-200' },
+    red: { bg: 'bg-red-50', text: 'text-red-600', border: 'border-red-200' },
+    purple: { bg: 'bg-purple-50', text: 'text-purple-600', border: 'border-purple-200' },
+    violet: { bg: 'bg-violet-50', text: 'text-violet-600', border: 'border-violet-200' },
+    amber: { bg: 'bg-amber-50', text: 'text-amber-600', border: 'border-amber-200' },
+    orange: { bg: 'bg-orange-50', text: 'text-orange-600', border: 'border-orange-200' },
+    cyan: { bg: 'bg-cyan-50', text: 'text-cyan-600', border: 'border-cyan-200' },
+    teal: { bg: 'bg-teal-50', text: 'text-teal-600', border: 'border-teal-200' },
+    slate: { bg: 'bg-slate-50', text: 'text-slate-600', border: 'border-slate-200' },
 };
 
-const timeAgo = (dateStr) => {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'الآن';
-    if (mins < 60) return `منذ ${mins} دقيقة`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `منذ ${hours} ساعة`;
-    const days = Math.floor(hours / 24);
-    if (days < 7) return `منذ ${days} يوم`;
-    return new Date(dateStr).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short', year: 'numeric' });
+const roleLabel = (role) => {
+    if (role === 'admin') return { text: 'مدير', cls: 'bg-purple-100 text-purple-700 border-purple-200' };
+    if (role === 'director') return { text: 'مشرف', cls: 'bg-blue-100 text-blue-700 border-blue-200' };
+    return { text: 'مودريتور', cls: 'bg-slate-100 text-slate-600 border-slate-200' };
 };
 
-const formatTime = (dateStr) => {
-    return new Date(dateStr).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true });
+const formatDateHeader = (dateStr) => {
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+    const yesterday = new Date(Date.now() - 86400000);
+    const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
+    if (dateStr === todayStr) return '📅 اليوم';
+    if (dateStr === yesterdayStr) return '📅 أمس';
+    const d = new Date(dateStr + 'T12:00:00');
+    return d.toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' });
 };
 
-const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' });
+const formatTime = (ts) => {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
+};
+
+// Group logs by LOCAL date (not UTC)
+const getLocalDateKey = (ts) => {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 };
 
 export default function AuditLogPage() {
@@ -70,218 +78,160 @@ export default function AuditLogPage() {
         searchTimeout.current = setTimeout(() => fetchLogs(), 400);
     };
 
-    // Group logs by date
-    const groupedLogs = logs.reduce((groups, log) => {
-        const dateKey = new Date(log.created_at).toISOString().split('T')[0];
-        if (!groups[dateKey]) groups[dateKey] = [];
-        groups[dateKey].push(log);
-        return groups;
-    }, {});
+    const groupedLogs = useMemo(() => {
+        return logs.reduce((g, log) => {
+            const dk = getLocalDateKey(log.created_at);
+            if (!g[dk]) g[dk] = [];
+            g[dk].push(log);
+            return g;
+        }, {});
+    }, [logs]);
 
     const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
     return (
-        <div className="space-y-5 animate-fade-in pb-20 font-sans text-slate-800">
+        <div className="space-y-5 animate-fade-in pb-20">
 
-            {/* Header */}
-            <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-2xl p-5 md:p-8 text-white relative overflow-hidden shadow-xl">
-                <div className="absolute -left-10 -bottom-10 text-[120px] opacity-5"><i className="fa-solid fa-clock-rotate-left"></i></div>
-                <div className="relative z-10">
-                    <div className="flex items-center gap-3 mb-3">
-                        <div className="bg-indigo-500/20 p-3 rounded-xl backdrop-blur-sm border border-indigo-400/20">
-                            <i className="fa-solid fa-clock-rotate-left text-2xl text-indigo-400"></i>
-                        </div>
-                        <div>
-                            <h2 className="text-xl md:text-2xl font-extrabold">سجل العمليات</h2>
-                            <p className="text-slate-400 text-xs md:text-sm font-medium">تتبع كل العمليات اللي بتتم على النظام</p>
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap gap-3 mt-4">
-                        <div className="bg-white/10 backdrop-blur-sm rounded-2xl px-5 py-3 border border-white/10">
-                            <p className="text-slate-400 text-[10px] font-bold mb-1">إجمالي العمليات</p>
-                            <p className="text-xl font-black">{totalCount.toLocaleString()}</p>
-                        </div>
-                        <div className="bg-white/10 backdrop-blur-sm rounded-2xl px-5 py-3 border border-white/10">
-                            <p className="text-slate-400 text-[10px] font-bold mb-1">التصنيف</p>
-                            <p className="text-xl font-black">{CATEGORIES[category]?.label || 'الكل'}</p>
-                        </div>
+            {/* === Header === */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-slate-800 via-indigo-600 to-purple-500"></div>
+                <div className="flex items-center gap-3 pt-1">
+                    <div className="bg-slate-800 text-white p-2.5 rounded-xl"><i className="fa-solid fa-clock-rotate-left text-lg"></i></div>
+                    <div>
+                        <h2 className="text-lg font-extrabold text-slate-800">سجل العمليات</h2>
+                        <p className="text-[11px] text-slate-400 font-bold">توثيق تلقائي لكل الإجراءات • {totalCount.toLocaleString()} عملية إجمالاً</p>
                     </div>
                 </div>
             </div>
 
-            {/* Filters */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                {/* Search */}
-                <div className="relative mb-4">
+            {/* === البحث + الفلترة === */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+                <div className="relative">
                     <i className="fa-solid fa-search absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
-                    <input
-                        type="text"
-                        placeholder="ابحث في سجل العمليات..."
-                        value={search}
-                        onChange={e => handleSearch(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 pr-11 pl-4 text-sm font-bold text-slate-700 placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300 transition-all"
-                    />
+                    <input type="text" placeholder="ابحث... (عميل، منتج، عملية)" value={search} onChange={e => handleSearch(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pr-11 pl-4 text-sm font-bold text-slate-700 placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 transition" />
+                    {search && <button onClick={() => handleSearch('')} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-red-500"><i className="fa-solid fa-xmark"></i></button>}
                 </div>
-
-                {/* Category Tabs */}
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                     {Object.entries(CATEGORIES).map(([key, cat]) => (
-                        <button
-                            key={key}
-                            onClick={() => { setCategory(key); setPage(0); }}
-                            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
-                                category === key
-                                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200'
-                                    : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-700 border border-slate-100'
-                            }`}
-                        >
-                            <i className={`fa-solid ${cat.icon} text-[10px]`}></i>
-                            {cat.label}
+                        <button key={key} onClick={() => { setCategory(key); setPage(0); }}
+                            className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1.5 ${category === key ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-100'}`}>
+                            <i className={`fa-solid ${cat.icon} text-[9px]`}></i> {cat.label}
                         </button>
                     ))}
                 </div>
             </div>
 
-            {/* Logs Timeline */}
+            {/* === السجل (جدول) === */}
             {loading ? (
-                <div className="space-y-3">
-                    {[1, 2, 3, 4, 5].map(i => (
-                        <div key={i} className="bg-white rounded-2xl border border-slate-100 p-4 animate-pulse">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-slate-100 rounded-xl"></div>
-                                <div className="flex-1 space-y-2">
-                                    <div className="h-3 bg-slate-100 rounded w-3/4"></div>
-                                    <div className="h-2 bg-slate-50 rounded w-1/2"></div>
-                                </div>
+                <div className="bg-white rounded-2xl border border-slate-200 p-8">
+                    <div className="space-y-3">
+                        {[1,2,3,4,5,6].map(i => (
+                            <div key={i} className="flex items-center gap-4 animate-pulse">
+                                <div className="w-16 h-4 bg-slate-100 rounded"></div>
+                                <div className="w-20 h-5 bg-slate-100 rounded-lg"></div>
+                                <div className="flex-1 h-4 bg-slate-50 rounded"></div>
+                                <div className="w-20 h-4 bg-slate-50 rounded"></div>
                             </div>
-                        </div>
-                    ))}
+                        ))}
+                    </div>
                 </div>
             ) : logs.length === 0 ? (
                 <div className="bg-white rounded-2xl border-2 border-dashed border-slate-200 p-16 text-center">
                     <i className="fa-solid fa-inbox text-5xl text-slate-200 mb-4 block"></i>
-                    <p className="font-bold text-lg text-slate-400">لا توجد عمليات بعد</p>
-                    <p className="text-sm text-slate-300 mt-1">العمليات هتظهر هنا أول ما يبدأ فيه نشاط</p>
+                    <p className="font-bold text-lg text-slate-400">{search ? `لا توجد نتائج لـ "${search}"` : 'لا توجد عمليات بعد'}</p>
+                    {search && <button onClick={() => handleSearch('')} className="mt-3 text-sm text-indigo-500 font-bold hover:text-indigo-700"><i className="fa-solid fa-arrow-rotate-right ml-1"></i> مسح البحث</button>}
                 </div>
             ) : (
-                <div className="space-y-6">
+                <div className="space-y-5">
                     {Object.entries(groupedLogs).map(([dateKey, dayLogs]) => (
-                        <div key={dateKey}>
-                            {/* Date Header */}
-                            <div className="flex items-center gap-3 mb-3">
-                                <div className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-indigo-100">
-                                    <i className="fa-solid fa-calendar-day ml-1.5"></i>
-                                    {formatDate(dateKey)}
-                                </div>
-                                <div className="flex-1 h-px bg-slate-100"></div>
-                                <span className="text-[10px] font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded">{dayLogs.length} عملية</span>
+                        <div key={dateKey} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            {/* عنوان اليوم */}
+                            <div className="bg-slate-50 border-b border-slate-200 px-5 py-3 flex items-center justify-between">
+                                <h3 className="text-sm font-extrabold text-slate-700">{formatDateHeader(dateKey)}</h3>
+                                <span className="text-[10px] font-bold text-slate-400 bg-white px-2.5 py-1 rounded-lg border border-slate-200">{dayLogs.length} عملية</span>
                             </div>
 
-                            {/* Day's Logs */}
-                            <div className="space-y-2 relative">
-                                {/* Timeline line */}
-                                <div className="absolute right-[26px] top-0 bottom-0 w-0.5 bg-slate-100 hidden md:block"></div>
-
-                                {dayLogs.map(log => {
-                                    const actionInfo = ACTION_TYPES[log.action] || { label: log.action, icon: 'fa-circle', color: 'slate' };
-                                    const c = colorClasses[actionInfo.color] || colorClasses.slate;
-                                    return (
-                                        <div key={log.id} className="bg-white rounded-xl border border-slate-100 hover:border-slate-200 hover:shadow-sm transition-all p-3 md:p-4 md:mr-10 relative group">
-                                            {/* Timeline dot */}
-                                            <div className={`absolute -right-[34px] top-4 w-3 h-3 rounded-full ${c.dot} ring-4 ring-white hidden md:block`}></div>
-
-                                            <div className="flex items-start gap-3">
-                                                {/* Icon */}
-                                                <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${c.bg} ${c.text}`}>
-                                                    <i className={`fa-solid ${actionInfo.icon} text-sm`}></i>
-                                                </div>
-
-                                                {/* Content */}
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-lg ${c.bg} ${c.text} border ${c.border}`}>
-                                                            {actionInfo.label}
+                            {/* جدول العمليات */}
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="border-b border-slate-100 text-slate-400">
+                                            <th className="px-4 py-2.5 text-right font-bold text-[11px] w-[70px]">الوقت</th>
+                                            <th className="px-3 py-2.5 text-right font-bold text-[11px] w-[120px]">العملية</th>
+                                            <th className="px-3 py-2.5 text-right font-bold text-[11px]">الوصف</th>
+                                            <th className="px-3 py-2.5 text-right font-bold text-[11px] w-[100px]">المستخدم</th>
+                                            <th className="px-4 py-2.5 text-center font-bold text-[11px] w-[70px]">الدور</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-50">
+                                        {dayLogs.map(log => {
+                                            const info = ACTION_TYPES[log.action] || { label: log.action, icon: 'fa-circle', color: 'slate' };
+                                            const c = colorMap[info.color] || colorMap.slate;
+                                            const role = roleLabel(log.user_role);
+                                            return (
+                                                <tr key={log.id} className="hover:bg-slate-50/50 transition-colors group">
+                                                    <td className="px-4 py-3 text-right">
+                                                        <span className="text-[11px] font-bold text-slate-500 font-mono whitespace-nowrap">
+                                                            {formatTime(log.created_at)}
                                                         </span>
-                                                        <span className="text-[10px] font-bold text-slate-400 bg-slate-50 px-2 py-0.5 rounded-lg flex items-center gap-1">
-                                                            <i className="fa-solid fa-user text-[8px]"></i>
+                                                    </td>
+                                                    <td className="px-3 py-3">
+                                                        <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-md ${c.bg} ${c.text} border ${c.border} whitespace-nowrap`}>
+                                                            <i className={`fa-solid ${info.icon} text-[8px]`}></i>
+                                                            {info.label}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-3 py-3">
+                                                        <p className="text-[12px] font-bold text-slate-700 leading-relaxed">{log.description}</p>
+                                                        {log.meta && Object.keys(log.meta).length > 0 && (
+                                                            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                                                {Object.entries(log.meta).slice(0, 3).map(([k, v]) => (
+                                                                    <span key={k} className="text-[9px] font-bold text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
+                                                                        {k}: <span className="text-slate-600">{typeof v === 'object' ? JSON.stringify(v) : String(v).substring(0, 30)}</span>
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-3 py-3">
+                                                        <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
+                                                            <i className="fa-solid fa-user text-[8px] text-slate-400"></i>
                                                             {log.user_name}
                                                         </span>
-                                                        {log.user_role && (
-                                                            <span className="text-[9px] font-bold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">
-                                                                {log.user_role}
-                                                            </span>
-                                                        )}
-                                                    </div>
-
-                                                    <p className="text-sm font-bold text-slate-700 leading-relaxed">{log.description}</p>
-
-                                                    {/* Meta details */}
-                                                    {log.meta && Object.keys(log.meta).length > 0 && (
-                                                        <div className="mt-2 bg-slate-50 rounded-lg p-2 text-[10px] text-slate-500 font-mono space-y-0.5 max-h-20 overflow-y-auto">
-                                                            {Object.entries(log.meta).map(([k, v]) => (
-                                                                <div key={k} className="flex gap-2">
-                                                                    <span className="text-slate-400 font-bold min-w-[60px]">{k}:</span>
-                                                                    <span className="text-slate-600 break-all">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </div>
-
-                                                {/* Time */}
-                                                <div className="text-left flex-shrink-0 flex flex-col items-end gap-1">
-                                                    <span className="text-[10px] font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded-lg">{formatTime(log.created_at)}</span>
-                                                    <span className="text-[9px] text-slate-300 font-bold">{timeAgo(log.created_at)}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-center">
+                                                        <span className={`text-[9px] font-bold px-2 py-1 rounded-md border ${role.cls} whitespace-nowrap`}>
+                                                            {role.text}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     ))}
 
-                    {/* Pagination */}
+                    {/* الترقيم */}
                     {totalPages > 1 && (
-                        <div className="flex items-center justify-center gap-2 pt-4">
-                            <button
-                                onClick={() => setPage(p => Math.max(0, p - 1))}
-                                disabled={page === 0}
-                                className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold text-slate-600 disabled:opacity-40 hover:bg-slate-50 transition-all"
-                            >
-                                <i className="fa-solid fa-chevron-right ml-1"></i> السابق
-                            </button>
-                            <span className="text-xs font-bold text-slate-400 bg-slate-50 px-4 py-2 rounded-xl">
-                                {page + 1} / {totalPages}
-                            </span>
-                            <button
-                                onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-                                disabled={page >= totalPages - 1}
-                                className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold text-slate-600 disabled:opacity-40 hover:bg-slate-50 transition-all"
-                            >
-                                التالي <i className="fa-solid fa-chevron-left mr-1"></i>
-                            </button>
+                        <div className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center justify-between flex-wrap gap-3">
+                            <p className="text-[11px] font-bold text-slate-400">{page * PAGE_SIZE + 1}-{Math.min((page + 1) * PAGE_SIZE, totalCount)} من {totalCount}</p>
+                            <div className="flex items-center gap-1.5">
+                                <button onClick={() => setPage(0)} disabled={page === 0} className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-200 text-slate-500 text-[11px] font-bold disabled:opacity-30 hover:bg-slate-100 transition flex items-center justify-center"><i className="fa-solid fa-angles-right text-[10px]"></i></button>
+                                <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} className="px-3 h-8 rounded-lg bg-slate-50 border border-slate-200 text-slate-500 text-[11px] font-bold disabled:opacity-30 hover:bg-slate-100 transition">السابق</button>
+                                {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                                    let pn = totalPages <= 5 ? i : page < 3 ? i : page > totalPages - 4 ? totalPages - 5 + i : page - 2 + i;
+                                    return <button key={pn} onClick={() => setPage(pn)} className={`w-8 h-8 rounded-lg text-[11px] font-bold transition ${page === pn ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-50 border border-slate-200 text-slate-500 hover:bg-slate-100'}`}>{pn + 1}</button>;
+                                })}
+                                <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1} className="px-3 h-8 rounded-lg bg-slate-50 border border-slate-200 text-slate-500 text-[11px] font-bold disabled:opacity-30 hover:bg-slate-100 transition">التالي</button>
+                                <button onClick={() => setPage(totalPages - 1)} disabled={page >= totalPages - 1} className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-200 text-slate-500 text-[11px] font-bold disabled:opacity-30 hover:bg-slate-100 transition flex items-center justify-center"><i className="fa-solid fa-angles-left text-[10px]"></i></button>
+                            </div>
                         </div>
                     )}
                 </div>
             )}
-
-            {/* Info */}
-            <div className="bg-blue-50 p-4 rounded-2xl border border-blue-200">
-                <div className="flex items-start gap-3">
-                    <div className="bg-blue-100 p-2 rounded-xl text-blue-600 flex-shrink-0">
-                        <i className="fa-solid fa-circle-info"></i>
-                    </div>
-                    <div className="text-xs text-blue-700">
-                        <p className="font-bold mb-1">عن سجل العمليات</p>
-                        <ul className="space-y-1">
-                            <li>• كل عملية بتتسجل تلقائياً مع <strong>اسم المستخدم</strong> والوقت</li>
-                            <li>• يمكنك <strong>تصفية</strong> العمليات حسب التصنيف أو البحث بالنص</li>
-                            <li>• السجل بيتحفظ في قاعدة البيانات إن وُجد الجدول أو في المتصفح كبديل</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
 
             <style>{`
                 .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }

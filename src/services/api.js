@@ -153,13 +153,27 @@ export const productsAPI = {
 };
 
 // ============ INVENTORY SECTIONS ============
+const SECTION_COSTS_KEY = 'service_hub_section_costs'; // { sectionId: costUSD }
+
+const _getSectionCosts = () => {
+    try { return JSON.parse(localStorage.getItem(SECTION_COSTS_KEY) || '{}'); }
+    catch { return {}; }
+};
+const _saveSectionCosts = (map) => {
+    localStorage.setItem(SECTION_COSTS_KEY, JSON.stringify(map));
+};
+
 export const sectionsAPI = {
     async getAll() {
         const { data } = await supabase
             .from('inventory_sections')
             .select('*')
             .order('created_at', { ascending: false });
-        return data || [];
+        const costs = _getSectionCosts();
+        return (data || []).map(s => ({
+            ...s,
+            costPerItem: costs[s.id] || 0,
+        }));
     },
 
     async create(section) {
@@ -170,12 +184,39 @@ export const sectionsAPI = {
             type: section.type || 'accounts',
         });
         if (error) throw error;
+        // Save cost in localStorage
+        if (section.costPerItem > 0) {
+            const costs = _getSectionCosts();
+            costs[id] = Number(section.costPerItem);
+            _saveSectionCosts(costs);
+        }
         return id;
+    },
+
+    async update(id, updates) {
+        const row = {};
+        if (updates.name !== undefined) row.name = updates.name;
+        if (updates.type !== undefined) row.type = updates.type;
+        // Only send DB updates if there are DB fields to update
+        if (Object.keys(row).length > 0) {
+            const { error } = await supabase.from('inventory_sections').update(row).eq('id', id);
+            if (error) throw error;
+        }
+        // Save cost in localStorage
+        if (updates.costPerItem !== undefined) {
+            const costs = _getSectionCosts();
+            costs[id] = Number(updates.costPerItem);
+            _saveSectionCosts(costs);
+        }
     },
 
     async delete(id, sectionName) {
         await supabase.from('accounts').delete().eq('product_name', sectionName);
         await supabase.from('inventory_sections').delete().eq('id', id);
+        // Clean up localStorage cost
+        const costs = _getSectionCosts();
+        delete costs[id];
+        _saveSectionCosts(costs);
     }
 };
 
@@ -261,7 +302,7 @@ export const accountsAPI = {
     },
 
     async pullNext(sectionName) {
-        // Get next available account for a section
+        // Get all pullable accounts for a section — ordered by creation date (FIFO)
         const { data } = await supabase
             .from('accounts')
             .select('*')
@@ -269,15 +310,27 @@ export const accountsAPI = {
             .in('status', ['available', 'used'])
             .order('created_at', { ascending: true });
 
-        const available = (data || []).filter(a =>
-            a.status === 'available' || (a.status === 'used' && (a.allowed_uses === -1 || a.current_uses < a.allowed_uses))
+        if (!data || data.length === 0) return { empty: true };
+
+        // Filter to only accounts that can still be used
+        const usable = data.filter(a =>
+            a.status === 'available' ||
+            (a.status === 'used' && (a.allowed_uses === -1 || a.current_uses < a.allowed_uses))
         );
 
-        if (available.length === 0) return { empty: true };
+        if (usable.length === 0) return { empty: true };
 
-        const target = available[0];
-        const newUses = target.current_uses + 1;
-        const newStatus = (target.allowed_uses !== -1 && newUses >= target.allowed_uses) ? 'completed' : 'used';
+        // PRIORITY: First pick 'used' accounts that still have remaining uses
+        // This ensures the same code/workspace keeps being pulled until exhausted
+        const inProgress = usable.filter(a => a.status === 'used');
+        const fresh = usable.filter(a => a.status === 'available');
+
+        // Pick in-progress first (oldest first = FIFO), then fresh accounts
+        const target = inProgress.length > 0 ? inProgress[0] : fresh[0];
+
+        const newUses = (target.current_uses || 0) + 1;
+        const maxUses = target.allowed_uses;
+        const newStatus = (maxUses !== -1 && newUses >= maxUses) ? 'completed' : 'used';
 
         await supabase.from('accounts').update({
             current_uses: newUses,
@@ -292,7 +345,52 @@ export const accountsAPI = {
             twoFA: target.two_fa,
         };
         telegram.inventoryPulled(sectionName, target.email);
-        auditLog.log('stock_pull', `سحب من ${sectionName}: ${target.email}`, { section: sectionName, email: target.email });
+        auditLog.log('stock_pull', `سحب من ${sectionName}: ${target.email} (${newUses}/${maxUses === -1 ? '∞' : maxUses})`, { section: sectionName, email: target.email, uses: `${newUses}/${maxUses}` });
+
+        // Auto-add expense on pull: cost is stored in USD (localStorage), convert to EGP
+        try {
+            let costUSD = 0;
+            let autoExpenseDesc = '';
+            let autoExpenseType = 'تكلفة مخزون';
+
+            // 1. Check linked recurring expenses from localStorage
+            const allRecurring = _getRecurring();
+            const linkedRec = allRecurring.find(r => r.linkedSection === sectionName && r.isActive !== false);
+
+            if (linkedRec) {
+                costUSD = linkedRec.defaultAmount || 0;
+                autoExpenseDesc = `${linkedRec.label} — سحب: ${sectionName} - ${target.email}`;
+                autoExpenseType = linkedRec.type || 'تكلفة مخزون';
+            } else {
+                // 2. Fallback to section cost from localStorage
+                const allCosts = _getSectionCosts();
+                // Find section ID by name
+                const { data: secRow } = await supabase
+                    .from('inventory_sections')
+                    .select('id')
+                    .eq('name', sectionName)
+                    .single();
+                if (secRow && allCosts[secRow.id] > 0) {
+                    costUSD = allCosts[secRow.id];
+                    autoExpenseDesc = `سحب تلقائي: ${sectionName} - ${target.email}`;
+                }
+            }
+
+            if (costUSD > 0) {
+                // Convert USD to EGP using stored rate
+                const usdRate = Number(localStorage.getItem('service_hub_usd_rate') || '50');
+                const amountEGP = Math.round(costUSD * usdRate * 100) / 100;
+                autoExpenseDesc += ` ($${costUSD} × ${usdRate})`;
+                await supabase.from('expenses').insert({
+                    type: autoExpenseType,
+                    amount: amountEGP,
+                    description: autoExpenseDesc,
+                    date: new Date().toISOString().split('T')[0],
+                    expense_category: 'daily',
+                });
+            }
+        } catch (e) { console.warn('Auto-expense on pull error:', e); }
+
         return result;
     }
 };
@@ -454,12 +552,14 @@ export const salesAPI = {
             customer_password: sale.customerPassword || '',
         }).eq('id', id);
         if (error) throw error;
+        telegram.saleEdited(sale);
         auditLog.log('sale_update', `تعديل بيعة: ${sale.customerName || sale.customerEmail} - ${sale.productName}`, { id, product: sale.productName });
     },
 
-    async delete(id) {
+    async delete(id, saleInfo) {
+        if (saleInfo) telegram.saleDeleted(saleInfo);
         await supabase.from('sales').delete().eq('id', id);
-        auditLog.log('sale_delete', `حذف بيعة: ${id}`, { id });
+        auditLog.log('sale_delete', `حذف بيعة: ${saleInfo?.customerName || id} - ${saleInfo?.productName || ''}`, { id });
     },
 
     async togglePaid(id, isPaid, finalPrice, saleInfo) {
@@ -506,6 +606,7 @@ export const expensesAPI = {
             expense_category: expense.expenseCategory || 'daily',
         }).select().single();
         if (error) throw error;
+        telegram.expenseAdded(expense);
         auditLog.log('expense_create', `مصروف جديد: ${expense.description || expense.type} (${expense.amount} EGP)`, { type: expense.type, amount: expense.amount });
         return data;
     },
@@ -522,8 +623,72 @@ export const expensesAPI = {
         if (error) throw error;
     },
 
-    async delete(id) {
+    async delete(id, expenseInfo) {
+        if (expenseInfo) telegram.expenseDeleted(expenseInfo);
         await supabase.from('expenses').delete().eq('id', id);
+        auditLog.log('expense_delete', `حذف مصروف: ${expenseInfo?.description || id} (${expenseInfo?.amount || 0} EGP)`, { id });
+    }
+};
+
+// ============ RECURRING EXPENSES (localStorage) ============
+const RECURRING_KEY = 'service_hub_recurring_expenses';
+
+const _getRecurring = () => {
+    try { return JSON.parse(localStorage.getItem(RECURRING_KEY) || '[]'); }
+    catch { return []; }
+};
+const _saveRecurring = (items) => {
+    localStorage.setItem(RECURRING_KEY, JSON.stringify(items));
+};
+
+export const recurringExpensesAPI = {
+    async getAll() {
+        return _getRecurring();
+    },
+
+    async create(item) {
+        const id = 'REC-' + Date.now();
+        const items = _getRecurring();
+        items.unshift({
+            id,
+            label: item.label,
+            defaultAmount: Number(item.defaultAmount) || 0,
+            type: item.type || 'إعلان',
+            expenseCategory: item.expenseCategory || 'daily',
+            linkedSection: item.linkedSection || '',
+            isActive: true,
+            createdAt: new Date().toISOString(),
+        });
+        _saveRecurring(items);
+        return id;
+    },
+
+    async update(id, updates) {
+        const items = _getRecurring();
+        const idx = items.findIndex(i => i.id === id);
+        if (idx !== -1) {
+            items[idx] = { ...items[idx], ...updates };
+            _saveRecurring(items);
+        }
+    },
+
+    async delete(id) {
+        const items = _getRecurring().filter(i => i.id !== id);
+        _saveRecurring(items);
+    },
+
+    // Log a recurring expense as an actual expense entry
+    async logToday(recurring, actualAmount, customDate) {
+        const amount = actualAmount || recurring.defaultAmount;
+        const date = customDate || new Date().toISOString().split('T')[0];
+        const expense = {
+            type: recurring.type,
+            amount,
+            description: `${recurring.label} (مصروف ثابت)`,
+            date,
+            expenseCategory: recurring.expenseCategory || 'daily',
+        };
+        return await expensesAPI.create(expense);
     }
 };
 

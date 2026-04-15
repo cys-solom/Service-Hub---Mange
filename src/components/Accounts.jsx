@@ -18,6 +18,7 @@ export default function Accounts() {
     const [filterStatus, setFilterStatus] = useState('all');
     const [copiedId, setCopiedId] = useState(null);
     const [visibleCount, setVisibleCount] = useState(20);
+    const [editingSection, setEditingSection] = useState(null); // full section edit
     const [pulledResult, setPulledResult] = useState(null);
     const [selectedSection, setSelectedSection] = useState(null);
     // Quick links state
@@ -51,6 +52,14 @@ export default function Accounts() {
     };
 
     const deleteLink = async (id) => {
+        const confirmed = await showConfirm({
+            title: 'حذف الرابط',
+            message: 'هل أنت متأكد من حذف هذا الرابط السريع؟',
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
         try {
             await quickLinksAPI.delete(id);
             await refreshQuickLinks();
@@ -72,12 +81,19 @@ export default function Accounts() {
         return accounts.filter(a => a.productName === currentSection.name);
     }, [accounts, currentSection]);
 
-    const accountStats = useMemo(() => ({
-        total: sectionAccounts.length,
-        available: sectionAccounts.filter(a => a.status === 'available').length,
-        used: sectionAccounts.filter(a => a.status === 'used').length,
-        full: sectionAccounts.filter(a => a.status === 'completed').length,
-    }), [sectionAccounts]);
+    const accountStats = useMemo(() => {
+        const pullable = sectionAccounts.filter(a => 
+            a.status === 'available' || 
+            (a.status === 'used' && (a.allowed_uses === -1 || a.current_uses < a.allowed_uses))
+        ).length;
+        return {
+            total: sectionAccounts.length,
+            available: sectionAccounts.filter(a => a.status === 'available').length,
+            used: sectionAccounts.filter(a => a.status === 'used').length,
+            full: sectionAccounts.filter(a => a.status === 'completed').length,
+            pullable,
+        };
+    }, [sectionAccounts]);
 
     // Global stats for overview
     const globalStats = useMemo(() => ({
@@ -88,6 +104,14 @@ export default function Accounts() {
         accountSections: sections.filter(s => s.type === 'accounts').length,
         codeSections: sections.filter(s => s.type === 'codes').length,
     }), [accounts, sections]);
+
+    // Global pullable count
+    const globalPullable = useMemo(() => 
+        accounts.filter(a => 
+            a.status === 'available' || 
+            (a.status === 'used' && (a.allowed_uses === -1 || a.current_uses < a.allowed_uses))
+        ).length
+    , [accounts]);
 
     // Filtered
     const filteredAccounts = useMemo(() => {
@@ -108,10 +132,14 @@ export default function Accounts() {
         return c;
     }, [accounts]);
 
-    // Available counts per section
+    // Pullable counts per section (available + used with remaining uses)
     const sectionAvailable = useMemo(() => {
         const c = {};
-        accounts.filter(a => a.status === 'available').forEach(a => { c[a.productName] = (c[a.productName] || 0) + 1; });
+        accounts.forEach(a => {
+            const canPull = a.status === 'available' || 
+                (a.status === 'used' && (a.allowed_uses === -1 || a.current_uses < a.allowed_uses));
+            if (canPull) c[a.productName] = (c[a.productName] || 0) + 1;
+        });
         return c;
     }, [accounts]);
 
@@ -137,10 +165,11 @@ export default function Accounts() {
         const fd = new FormData(e.target);
         const name = fd.get('sectionName')?.trim();
         const type = fd.get('sectionType');
+        const costPerItem = Number(fd.get('costPerItem') || 0);
         if (!name) return;
         if (sections.find(s => s.name === name)) { showAlert({ title: 'خطأ', message: 'يوجد سجل بنفس الاسم بالفعل!', type: 'warning' }); return; }
         try {
-            await sectionsAPI.create({ name, type });
+            await sectionsAPI.create({ name, type, costPerItem });
             setShowSectionModal(false);
             await refreshData();
         } catch (error) {
@@ -336,6 +365,14 @@ export default function Accounts() {
                         </div>
                     </div>
 
+                    {/* Cost per item — Admin only */}
+                    {user?.role === 'admin' && sec.costPerItem > 0 && (
+                        <div className="flex items-center gap-1.5 mb-3 text-[10px] font-bold text-rose-600 bg-rose-50 px-2.5 py-1.5 rounded-lg border border-rose-200">
+                            <i className="fa-solid fa-coins text-[9px]"></i>
+                            <span>تكلفة السحب: ${Number(sec.costPerItem).toLocaleString()} / مرة</span>
+                        </div>
+                    )}
+
                     {/* Progress Bar */}
                     <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
                         <div className="bg-emerald-500 h-1.5 rounded-full transition-all duration-500" style={{ width: `${pct}%` }}></div>
@@ -369,6 +406,12 @@ export default function Accounts() {
                         className="py-2 px-3 rounded-xl text-xs font-bold bg-red-50 text-red-400 hover:text-red-600 hover:bg-red-100 transition-colors" title="حذف">
                         <i className="fa-solid fa-trash text-[10px]"></i>
                     </button>
+                    {user?.role === 'admin' && (
+                        <button onClick={(e) => { e.stopPropagation(); setEditingSection(sec); }}
+                            className="py-2 px-3 rounded-xl text-xs font-bold bg-blue-50 text-blue-500 hover:text-blue-700 hover:bg-blue-100 transition-colors" title="تعديل السجل">
+                            <i className="fa-solid fa-pen text-[10px]"></i>
+                        </button>
+                    )}
                 </div>
             </div>
         );
@@ -476,7 +519,7 @@ export default function Accounts() {
                                                     <a href={link.url} target="_blank" rel="noopener noreferrer" className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition" title="فتح الرابط">
                                                         <i className="fa-solid fa-arrow-up-right-from-square text-xs"></i>
                                                     </a>
-                                                    <button onClick={() => deleteLink(link.id)} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition opacity-0 group-hover:opacity-100" title="حذف">
+                                                    <button onClick={() => deleteLink(link.id)} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition" title="حذف">
                                                         <i className="fa-solid fa-trash text-[10px]"></i>
                                                     </button>
                                                 </div>
@@ -721,6 +764,19 @@ export default function Accounts() {
                             <div className="bg-blue-50 p-3.5 rounded-xl border border-blue-200">
                                 <p className="text-[12px] text-blue-700 font-bold flex items-center gap-1.5"><i className="fa-solid fa-circle-info"></i> لربط هذا السجل بمنتج، اذهب لصفحة المنتجات واختر "ربط بالمخزون" من إعدادات المنتج.</p>
                             </div>
+                            {/* تكلفة العنصر — Admin only */}
+                            {user?.role === 'admin' && (
+                            <div className="bg-gradient-to-r from-rose-50 to-orange-50 p-5 rounded-2xl border border-rose-200 space-y-3">
+                                <div className="text-xs font-black text-rose-700 uppercase tracking-widest flex items-center gap-1.5">
+                                    <i className="fa-solid fa-dollar-sign"></i> تكلفة السحب الواحد (بالدولار)
+                                </div>
+                                <div className="relative">
+                                    <input name="costPerItem" type="number" step="0.01" defaultValue="0" className="w-full bg-white border-2 border-rose-300 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-rose-100 focus:border-rose-500 outline-none transition-all text-rose-700 dir-ltr text-left" placeholder="0" min="0" />
+                                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-bold text-rose-300">$</span>
+                                </div>
+                                <p className="text-[10px] text-rose-500 font-medium"><i className="fa-solid fa-info-circle ml-1"></i> السعر بالدولار — يتحول لمصري تلقائياً حسب سعر الدولار الحالي عند كل سحب</p>
+                            </div>
+                            )}
                             <button type="submit" className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2">
                                 <i className="fa-solid fa-check"></i> إنشاء السجل
                             </button>
@@ -997,6 +1053,89 @@ export default function Accounts() {
                             <button type="submit" className="w-full bg-violet-600 text-white py-3.5 rounded-xl font-bold hover:bg-violet-700 shadow-lg shadow-violet-200 transition-all flex items-center justify-center gap-2">
                                 <i className="fa-solid fa-check"></i> حفظ الرابط
                             </button>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* ===== EDIT SECTION MODAL (Admin only) ===== */}
+            {editingSection && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[999] p-4 animate-fade-in">
+                    <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
+                        <div className="p-5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white flex justify-between items-center">
+                            <div>
+                                <h3 className="text-lg font-bold flex items-center gap-2"><i className="fa-solid fa-pen-to-square"></i> تعديل السجل</h3>
+                                <p className="text-indigo-200 text-xs font-medium mt-0.5">{editingSection.name}</p>
+                            </div>
+                            <button onClick={() => setEditingSection(null)} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition"><i className="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+                        <form onSubmit={async (e) => {
+                            e.preventDefault();
+                            const fd = new FormData(e.target);
+                            const newName = fd.get('sectionName')?.trim();
+                            const newType = fd.get('sectionType');
+                            const newCost = Number(fd.get('costPerItem') || 0);
+                            if (!newName) return;
+                            try {
+                                const updates = { costPerItem: newCost, type: newType };
+                                // If name changed, update it + sync related tables
+                                if (newName !== editingSection.name) {
+                                    updates.name = newName;
+                                    // Sync accounts and products that reference old name
+                                    const { productsAPI } = await import('../services/api');
+                                    await productsAPI.syncNameChange(editingSection.name, newName);
+                                }
+                                await sectionsAPI.update(editingSection.id, updates);
+                                setEditingSection(null);
+                                await refreshData();
+                                showAlert({ title: 'تم ✅', message: `تم تحديث "${newName}" بنجاح`, type: 'success' });
+                            } catch (err) {
+                                console.error(err);
+                                showAlert({ title: 'خطأ', message: err?.message || 'حدث خطأ', type: 'danger' });
+                            }
+                        }} className="p-6 space-y-5">
+                            {/* Name */}
+                            <div>
+                                <label className="block text-sm font-extrabold text-slate-800 mb-2">اسم السجل</label>
+                                <input name="sectionName" defaultValue={editingSection.name}
+                                    className="w-full bg-white border-2 border-slate-200 rounded-xl p-3.5 font-bold text-sm focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" required />
+                            </div>
+                            {/* Type */}
+                            <div>
+                                <label className="block text-sm font-extrabold text-slate-800 mb-2">نوع السجل</label>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <label className="flex items-center justify-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50 border-slate-200 hover:border-indigo-200">
+                                        <input type="radio" name="sectionType" value="accounts" defaultChecked={editingSection.type !== 'codes'} className="hidden" />
+                                        <i className="fa-solid fa-user-shield text-indigo-600"></i>
+                                        <span className="text-sm font-bold text-slate-700">حسابات</span>
+                                    </label>
+                                    <label className="flex items-center justify-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all has-[:checked]:border-amber-500 has-[:checked]:bg-amber-50 border-slate-200 hover:border-amber-200">
+                                        <input type="radio" name="sectionType" value="codes" defaultChecked={editingSection.type === 'codes'} className="hidden" />
+                                        <i className="fa-solid fa-key text-amber-600"></i>
+                                        <span className="text-sm font-bold text-slate-700">أكواد</span>
+                                    </label>
+                                </div>
+                            </div>
+                            {/* Cost in USD */}
+                            <div className="bg-gradient-to-r from-rose-50 to-orange-50 p-5 rounded-2xl border border-rose-200 space-y-3">
+                                <div className="text-xs font-black text-rose-700 uppercase tracking-widest flex items-center gap-1.5">
+                                    <i className="fa-solid fa-dollar-sign"></i> تكلفة السحب الواحد (بالدولار)
+                                </div>
+                                <div className="relative">
+                                    <input name="costPerItem" type="number" step="0.01" min="0" defaultValue={editingSection.costPerItem || 0}
+                                        className="w-full bg-white border-2 border-rose-300 rounded-xl p-4 font-bold text-lg focus:ring-4 focus:ring-rose-100 focus:border-rose-500 outline-none transition-all text-rose-700 dir-ltr text-left" />
+                                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-bold text-rose-300">$</span>
+                                </div>
+                                <p className="text-[10px] text-rose-500 font-medium">
+                                    <i className="fa-solid fa-info-circle ml-1"></i> السعر بالدولار — يتحول لمصري تلقائياً حسب سعر الدولار الحالي عند السحب. حط 0 لإلغاء.
+                                </p>
+                            </div>
+                            <div className="flex gap-3 pt-2">
+                                <button type="button" onClick={() => setEditingSection(null)} className="flex-1 py-3 rounded-xl font-bold text-slate-600 bg-slate-50 border-2 border-slate-200 hover:bg-slate-100 transition">إلغاء</button>
+                                <button type="submit" className="flex-1 py-3 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition flex items-center justify-center gap-2">
+                                    <i className="fa-solid fa-check"></i> حفظ التعديلات
+                                </button>
+                            </div>
                         </form>
                     </div>
                 </div>

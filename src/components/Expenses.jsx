@@ -1,12 +1,15 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
-import { expensesAPI, walletsAPI } from '../services/api';
+import { expensesAPI, walletsAPI, recurringExpensesAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { useConfirm } from './ConfirmDialog';
 
 export default function Expenses () {
     useEffect(() => { window.scrollTo(0, 0); }, []);
 
-    const { expenses: ctxExpenses, wallets: ctxWallets, accounts: ctxAccounts, sales: ctxSales, refreshData } = useData();
+    const { user } = useAuth();
+    const { expenses: ctxExpenses, wallets: ctxWallets, accounts: ctxAccounts, sales: ctxSales, sections: ctxSections, refreshData } = useData();
+    const isAdmin = user?.role === 'admin';
 
     const [expenses, setExpenses] = useState([]);
     const [wallets, setWallets] = useState([]);
@@ -15,10 +18,82 @@ export default function Expenses () {
     const [categoryFilter, setCategoryFilter] = useState('all'); // all | daily | stock
     const { showConfirm, showAlert } = useConfirm();
 
+    // Recurring expenses
+    const [recurringItems, setRecurringItems] = useState([]);
+    const [showRecurringModal, setShowRecurringModal] = useState(false);
+    const [logAmountOverride, setLogAmountOverride] = useState({});
+    const [logDateOverride, setLogDateOverride] = useState({});
+
+    const refreshRecurring = async () => {
+        try {
+            const items = await recurringExpensesAPI.getAll();
+            setRecurringItems(items);
+        } catch (e) { console.error(e); }
+    };
+    useEffect(() => { refreshRecurring(); }, []);
+
     useEffect(() => {
         setExpenses(ctxExpenses);
         setWallets(ctxWallets);
     }, [ctxExpenses, ctxWallets]);
+
+    // Check which recurring expenses have been logged today
+    const todayStr = new Date().toISOString().split('T')[0];
+    const loggedTodayIds = useMemo(() => {
+        const ids = new Set();
+        expenses.forEach(e => {
+            if (e.date === todayStr && e.description?.includes('(مصروف ثابت)')) {
+                recurringItems.forEach(r => {
+                    if (e.description?.includes(r.label)) ids.add(r.id);
+                });
+            }
+        });
+        return ids;
+    }, [expenses, recurringItems, todayStr]);
+
+    // Auto-log at 11:55 PM — checks every minute
+    useEffect(() => {
+        if (!isAdmin) return;
+        const autoLogKey = 'service_hub_autolog_' + todayStr;
+        
+        const checkAutoLog = async () => {
+            const now = new Date();
+            const hour = now.getHours();
+            const minute = now.getMinutes();
+            
+            // Only trigger at 23:55 or later
+            if (hour < 23 || (hour === 23 && minute < 55)) return;
+            
+            // Check if already auto-logged today
+            const done = JSON.parse(localStorage.getItem(autoLogKey) || '[]');
+            
+            const items = await recurringExpensesAPI.getAll();
+            for (const rec of items) {
+                if (!rec.isActive || rec.linkedSection) continue; // skip inactive or inventory-linked
+                if (done.includes(rec.id)) continue; // already auto-logged
+                
+                // Check if manually logged today
+                const alreadyLogged = expenses.some(e => 
+                    e.date === todayStr && e.description?.includes(rec.label) && e.description?.includes('(مصروف ثابت)')
+                );
+                if (alreadyLogged) continue;
+                
+                // Auto-log with default amount
+                try {
+                    await recurringExpensesAPI.logToday(rec, rec.defaultAmount, todayStr);
+                    done.push(rec.id);
+                    localStorage.setItem(autoLogKey, JSON.stringify(done));
+                    console.log(`[Auto-log] ${rec.label}: ${rec.defaultAmount} EGP`);
+                } catch (e) { console.warn('Auto-log error:', e); }
+            }
+            
+            if (done.length > 0) await refreshData();
+        };
+
+        const interval = setInterval(checkAutoLog, 60000); // every minute
+        checkAutoLog(); // check immediately
+        return () => clearInterval(interval);
+    }, [isAdmin, todayStr, expenses]);
 
     // ===== Stats =====
     const stats = useMemo(() => {
@@ -132,7 +207,7 @@ export default function Expenses () {
             await refundToWallet(expense.walletId || expense.wallet_id, expense.amount);
         }
         try {
-            await expensesAPI.delete(id);
+            await expensesAPI.delete(id, expense);
             await refreshData();
         } catch (error) {
             console.error(error);
@@ -148,6 +223,62 @@ export default function Expenses () {
     const getCategoryBadge = (cat) => {
         if (cat === 'stock') return { label: 'مخزون / استوك', color: 'bg-purple-50 text-purple-700 border-purple-200', icon: 'fa-boxes-stacked' };
         return { label: 'يومي / تشغيلي', color: 'bg-amber-50 text-amber-700 border-amber-200', icon: 'fa-clock' };
+    };
+
+    // ===== Recurring Expense Handlers =====
+    const handleAddRecurring = async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        try {
+            await recurringExpensesAPI.create({
+                label: fd.get('label')?.trim(),
+                defaultAmount: Number(fd.get('defaultAmount') || 0),
+                type: fd.get('type') || 'إعلان',
+                expenseCategory: fd.get('expenseCategory') || 'daily',
+                linkedSection: fd.get('linkedSection') || '',
+            });
+            setShowRecurringModal(false);
+            await refreshRecurring();
+        } catch (err) {
+            console.error('Recurring expense error:', err);
+            showAlert({ title: 'خطأ', message: err?.message || err?.details || JSON.stringify(err) || 'حدث خطأ', type: 'danger' });
+        }
+    };
+
+    const deleteRecurring = async (id) => {
+        const confirmed = await showConfirm({
+            title: 'حذف المصروف الثابت',
+            message: 'هل أنت متأكد من حذف هذا المصروف الثابت؟',
+            confirmText: 'حذف',
+            cancelText: 'إلغاء',
+            type: 'danger'
+        });
+        if (!confirmed) return;
+        try {
+            await recurringExpensesAPI.delete(id);
+            await refreshRecurring();
+        } catch (err) { console.error(err); }
+    };
+
+    const logRecurringToday = async (rec) => {
+        const overrideAmount = logAmountOverride[rec.id];
+        const amount = overrideAmount ? Number(overrideAmount) : rec.defaultAmount;
+        const customDate = logDateOverride[rec.id] || '';
+        if (!amount || amount <= 0) {
+            showAlert({ title: 'خطأ', message: 'المبلغ غير صالح', type: 'warning' });
+            return;
+        }
+        try {
+            await recurringExpensesAPI.logToday(rec, amount, customDate || undefined);
+            const dateLabel = customDate || todayStr;
+            showAlert({ title: 'تم ✅', message: `تم تسجيل ${rec.label} بمبلغ ${amount.toLocaleString()} EGP (${dateLabel})`, type: 'success' });
+            setLogAmountOverride(prev => ({ ...prev, [rec.id]: '' }));
+            setLogDateOverride(prev => ({ ...prev, [rec.id]: '' }));
+            await refreshData();
+        } catch (err) {
+            console.error(err);
+            showAlert({ title: 'خطأ', message: 'حدث خطأ أثناء التسجيل', type: 'danger' });
+        }
     };
 
     return (
@@ -187,6 +318,82 @@ export default function Expenses () {
                 </div>
             </div>
 
+            {/* ===== RECURRING / FIXED EXPENSES (Admin only) ===== */}
+            {isAdmin && recurringItems.length > 0 && (
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="p-4 flex items-center justify-between border-b border-slate-100">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-gradient-to-br from-amber-500 to-orange-500 rounded-xl flex items-center justify-center text-white shadow-md">
+                                <i className="fa-solid fa-rotate text-lg"></i>
+                            </div>
+                            <div>
+                                <h3 className="text-base font-extrabold text-slate-800">مصروفات ثابتة</h3>
+                                <p className="text-[10px] text-slate-400 font-medium">{recurringItems.length} مصروف ثابت — اضغط "تسجيل" لإضافته لمصروفات اليوم</p>
+                            </div>
+                        </div>
+                        <button onClick={() => setShowRecurringModal(true)} className="w-8 h-8 flex items-center justify-center bg-amber-100 text-amber-600 rounded-lg hover:bg-amber-200 transition">
+                            <i className="fa-solid fa-plus text-xs"></i>
+                        </button>
+                    </div>
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {recurringItems.map(rec => {
+                            const isLogged = loggedTodayIds.has(rec.id);
+                            return (
+                            <div key={rec.id} className={`rounded-xl p-4 border group relative transition-all ${isLogged ? 'bg-emerald-50 border-emerald-200' : 'bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200'}`}>
+                                <button onClick={() => deleteRecurring(rec.id)} className="absolute top-2 left-2 w-6 h-6 flex items-center justify-center rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition text-[10px]">
+                                    <i className="fa-solid fa-trash"></i>
+                                </button>
+                                {isLogged && (
+                                    <div className="absolute top-2 left-9 bg-emerald-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                                        <i className="fa-solid fa-check text-[7px]"></i> تم اليوم
+                                    </div>
+                                )}
+                                <div className="flex items-center gap-2 mb-3">
+                                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${isLogged ? 'bg-emerald-200 text-emerald-700' : 'bg-amber-200 text-amber-700'}`}>
+                                        <i className={`fa-solid ${isLogged ? 'fa-circle-check' : 'fa-rotate'} text-sm`}></i>
+                                    </div>
+                                    <div className="min-w-0">
+                                        <p className="font-bold text-sm text-slate-800 truncate">{rec.label}</p>
+                                        <p className="text-[10px] text-amber-600 font-bold">{rec.type} • {Number(rec.defaultAmount).toLocaleString()} EGP</p>
+                                        {rec.linkedSection && (
+                                            <p className="text-[9px] text-purple-600 font-bold flex items-center gap-1 mt-0.5">
+                                                <i className="fa-solid fa-link text-[8px]"></i> {rec.linkedSection}
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-2">
+                                        <div className="relative flex-1">
+                                            <input
+                                                type="number"
+                                                placeholder={String(rec.defaultAmount)}
+                                                value={logAmountOverride[rec.id] || ''}
+                                                onChange={e => setLogAmountOverride(prev => ({ ...prev, [rec.id]: e.target.value }))}
+                                                className="w-full bg-white border border-amber-300 rounded-lg px-3 py-2 text-sm font-bold text-amber-800 placeholder-amber-300 focus:ring-2 focus:ring-amber-200 outline-none dir-ltr text-left"
+                                            />
+                                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[9px] text-amber-400 font-bold">EGP</span>
+                                        </div>
+                                        <input
+                                            type="date"
+                                            value={logDateOverride[rec.id] || ''}
+                                            onChange={e => setLogDateOverride(prev => ({ ...prev, [rec.id]: e.target.value }))}
+                                            className="bg-white border border-amber-300 rounded-lg px-2 py-2 text-[11px] font-bold text-amber-800 focus:ring-2 focus:ring-amber-200 outline-none w-[115px]"
+                                        />
+                                    </div>
+                                    <button onClick={() => logRecurringToday(rec)} className={`w-full py-2 rounded-lg text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-1.5 ${isLogged ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-amber-600 hover:bg-amber-700 text-white'}`}>
+                                        <i className={`fa-solid ${isLogged ? 'fa-rotate-right' : 'fa-check'}`}></i> {isLogged ? 'تسجيل مرة أخرى' : 'تسجيل'}
+                                        {!logDateOverride[rec.id] && <span className="opacity-60 text-[9px]">(اليوم)</span>}
+                                    </button>
+                                </div>
+                                <p className="text-[8px] text-slate-400 mt-2 text-center">لو ما اتسجلش يدوي — هيتضاف تلقائي الساعة 11:55 م</p>
+                            </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
             {/* Header + Filters */}
             <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                 <div>
@@ -207,6 +414,11 @@ export default function Expenses () {
                             </button>
                         ))}
                     </div>
+                    {isAdmin && (
+                    <button onClick={() => setShowRecurringModal(true)} className="bg-amber-500 text-white px-5 py-3 rounded-xl font-bold shadow-lg shadow-amber-200 hover:bg-amber-600 transition-all flex items-center gap-2">
+                        <i className="fa-solid fa-rotate"></i> مصروف ثابت
+                    </button>
+                    )}
                     <button onClick={() => setShowAddModal(true)} className="bg-rose-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-rose-200 hover:bg-rose-700 hover:-translate-y-0.5 transition-all flex items-center gap-2">
                         <i className="fa-solid fa-plus text-lg"></i> إضافة مصروف
                     </button>
@@ -416,6 +628,84 @@ export default function Expenses () {
                                 <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
                                     <button type="button" onClick={() => setEditingExpense(null)} className="px-6 py-3 rounded-xl font-bold text-slate-600 bg-white border-2 border-slate-200 hover:bg-slate-100 transition shadow-sm">إلغاء</button>
                                     <button type="submit" className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 transition hover:-translate-y-0.5">حفظ التعديلات</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Recurring Expense Modal */}
+            {showRecurringModal && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
+                    <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+                        <div className="flex justify-between items-center p-6 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md">
+                            <h3 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-rotate"></i> إضافة مصروف ثابت</h3>
+                            <button onClick={() => setShowRecurringModal(false)} className="text-white/70 hover:text-white bg-white/10 hover:bg-white/20 p-2 rounded-full transition"><i className="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+                        <div className="p-8 bg-slate-50/50">
+                            <form onSubmit={handleAddRecurring} className="space-y-5">
+                                <div>
+                                    <label className="label-style">اسم المصروف الثابت</label>
+                                    <input name="label" className="input-style" placeholder="مثال: إعلانات يومية — سيرفر — اشتراك أداة..." required />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="label-style">المبلغ الافتراضي</label>
+                                        <div className="relative">
+                                            <input type="number" step="0.01" name="defaultAmount" className="input-style pl-12 text-amber-700" placeholder="0" required />
+                                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">EGP</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="label-style">النوع</label>
+                                        <select name="type" className="input-style">
+                                            <option value="إعلان">إعلان (Ads)</option>
+                                            <option value="اشتراكات تطبيقات">أدوات واشتراكات</option>
+                                            <option value="رواتب">رواتب</option>
+                                            <option value="شراء استوك">شراء استوك</option>
+                                            <option value="مصاريف أخرى">نثريات / أخرى</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="label-style">التصنيف</label>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <label className="flex items-center justify-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all has-[:checked]:border-amber-500 has-[:checked]:bg-amber-50 border-slate-200 hover:border-amber-200">
+                                            <input type="radio" name="expenseCategory" value="daily" defaultChecked className="hidden" />
+                                            <i className="fa-solid fa-clock text-amber-600"></i>
+                                            <span className="text-sm font-bold text-slate-700">يومي</span>
+                                        </label>
+                                        <label className="flex items-center justify-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all has-[:checked]:border-purple-500 has-[:checked]:bg-purple-50 border-slate-200 hover:border-purple-200">
+                                            <input type="radio" name="expenseCategory" value="stock" className="hidden" />
+                                            <i className="fa-solid fa-boxes-stacked text-purple-600"></i>
+                                            <span className="text-sm font-bold text-slate-700">مخزون</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                {/* ربط بالمخزون */}
+                                {ctxSections && ctxSections.length > 0 && (
+                                    <div className="bg-gradient-to-r from-purple-50 to-indigo-50 p-4 rounded-2xl border border-purple-200 space-y-2">
+                                        <div className="text-xs font-black text-purple-700 flex items-center gap-1.5">
+                                            <i className="fa-solid fa-link"></i> ربط بالمخزون (اختياري)
+                                        </div>
+                                        <select name="linkedSection" className="input-style text-xs">
+                                            <option value="">بدون ربط — تسجيل يدوي فقط</option>
+                                            {ctxSections.map(sec => (
+                                                <option key={sec.id} value={sec.name}>{sec.name} ({sec.type === 'codes' ? 'أكواد' : 'اكونتات'})</option>
+                                            ))}
+                                        </select>
+                                        <p className="text-[10px] text-purple-500 font-medium"><i className="fa-solid fa-info-circle ml-1"></i> لو ربطته بقسم مخزون، المصروف هيتسجل تلقائياً كل مرة يتسحب عنصر من القسم ده</p>
+                                    </div>
+                                )}
+                                <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200">
+                                    <p className="text-[11px] text-amber-700 font-bold flex items-center gap-1.5">
+                                        <i className="fa-solid fa-info-circle"></i> المصروف الثابت هيظهر في أعلى صفحة المصروفات ويمكنك تسجيله يومياً بضغطة واحدة مع إمكانية تعديل المبلغ
+                                    </p>
+                                </div>
+                                <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
+                                    <button type="button" onClick={() => setShowRecurringModal(false)} className="px-6 py-3 rounded-xl font-bold text-slate-600 bg-white border-2 border-slate-200 hover:bg-slate-100 transition shadow-sm">إلغاء</button>
+                                    <button type="submit" className="bg-amber-500 text-white px-8 py-3 rounded-xl font-bold hover:bg-amber-600 shadow-lg shadow-amber-200 transition hover:-translate-y-0.5">حفظ</button>
                                 </div>
                             </form>
                         </div>

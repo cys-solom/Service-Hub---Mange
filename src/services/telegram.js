@@ -20,14 +20,18 @@ const GROUPS = {
 // All available notification types
 const NOTIFICATION_TYPES = {
     newSale:         { label: 'بيع جديد',         icon: 'fa-cart-shopping',        color: 'indigo',  desc: 'عند إنشاء عملية بيع جديدة' },
+    saleEdited:      { label: 'تعديل بيعة',       icon: 'fa-pen-to-square',        color: 'blue',    desc: 'عند تعديل بيانات بيعة' },
+    saleDeleted:     { label: 'حذف بيعة',         icon: 'fa-trash',                color: 'red',     desc: 'عند حذف بيعة' },
     saleActivated:   { label: 'تفعيل بيعة',       icon: 'fa-circle-check',         color: 'emerald', desc: 'عند تعليم بيعة كمفعّلة' },
     debtPaid:        { label: 'دفع مديونية',      icon: 'fa-hand-holding-dollar',  color: 'amber',   desc: 'عند تعليم مديونية كمدفوعة' },
     saleRenewed:     { label: 'تجديد اشتراك',     icon: 'fa-rotate',               color: 'blue',    desc: 'عند تجديد اشتراك عميل' },
     stockAdded:      { label: 'إضافة مخزون',      icon: 'fa-boxes-stacked',        color: 'purple',  desc: 'عند إضافة حسابات أو أكواد للمخزون' },
+    stockReturned:   { label: 'إرجاع مخزون',      icon: 'fa-rotate-left',          color: 'teal',    desc: 'عند إرجاع حساب للمخزون' },
     inventoryPulled: { label: 'سحب من المخزون',   icon: 'fa-arrow-up-from-bracket', color: 'cyan',   desc: 'عند سحب حساب أو كود من المخزون' },
     newProblem:      { label: 'مشكلة جديدة',      icon: 'fa-triangle-exclamation', color: 'red',     desc: 'عند تسجيل مشكلة جديدة' },
     problemResolved: { label: 'حل مشكلة',         icon: 'fa-check-double',         color: 'green',   desc: 'عند حل مشكلة قائمة' },
     expenseAdded:    { label: 'مصروف جديد',       icon: 'fa-receipt',              color: 'orange',  desc: 'عند إضافة مصروف' },
+    expenseDeleted:  { label: 'حذف مصروف',        icon: 'fa-trash',                color: 'red',     desc: 'عند حذف مصروف' },
     dailyReport:     { label: 'التقرير اليومي',    icon: 'fa-chart-pie',            color: 'amber',   desc: 'ملخص يومي شامل بالمبيعات والأرباح' },
 };
 
@@ -35,10 +39,10 @@ const PREFS_KEY = 'sh_telegram_group_prefs';
 
 // Default: main group gets sales/payments, operations gets inventory, activations gets activation, daily gets report
 const DEFAULT_PREFS = {
-    main:        { newSale: true, debtPaid: true, saleRenewed: true, saleActivated: false, stockAdded: false, inventoryPulled: false, newProblem: true, problemResolved: true, expenseAdded: false, dailyReport: false },
-    operations:  { newSale: false, debtPaid: false, saleRenewed: false, saleActivated: false, stockAdded: true, inventoryPulled: true, newProblem: true, problemResolved: true, expenseAdded: true, dailyReport: false },
-    activations: { newSale: false, debtPaid: false, saleRenewed: false, saleActivated: true, stockAdded: false, inventoryPulled: false, newProblem: false, problemResolved: false, expenseAdded: false, dailyReport: false },
-    daily:       { newSale: false, debtPaid: false, saleRenewed: false, saleActivated: false, stockAdded: false, inventoryPulled: false, newProblem: false, problemResolved: false, expenseAdded: false, dailyReport: true },
+    main:        { newSale: true, saleEdited: true, saleDeleted: true, debtPaid: true, saleRenewed: true, saleActivated: false, stockAdded: false, stockReturned: false, inventoryPulled: false, newProblem: true, problemResolved: true, expenseAdded: false, expenseDeleted: false, dailyReport: false },
+    operations:  { newSale: false, saleEdited: false, saleDeleted: false, debtPaid: false, saleRenewed: false, saleActivated: false, stockAdded: true, stockReturned: true, inventoryPulled: true, newProblem: true, problemResolved: true, expenseAdded: true, expenseDeleted: true, dailyReport: false },
+    activations: { newSale: false, saleEdited: false, saleDeleted: false, debtPaid: false, saleRenewed: false, saleActivated: true, stockAdded: false, stockReturned: false, inventoryPulled: false, newProblem: false, problemResolved: false, expenseAdded: false, expenseDeleted: false, dailyReport: false },
+    daily:       { newSale: false, saleEdited: false, saleDeleted: false, debtPaid: false, saleRenewed: false, saleActivated: false, stockAdded: false, stockReturned: false, inventoryPulled: false, newProblem: false, problemResolved: false, expenseAdded: false, expenseDeleted: false, dailyReport: true },
 };
 
 const getPrefs = () => {
@@ -63,11 +67,19 @@ const savePrefs = (prefs) => {
 
 const isConfigured = () => BOT_TOKEN && BOT_TOKEN.length > 10;
 
+// Current logged-in user — set once from App.jsx
+let _currentUser = '';
+
 const timestamp = () => {
     const now = new Date();
     const d = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
     const t = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true });
     return `${d} • ${t}`;
+};
+
+const byLine = (overrideBy) => {
+    const who = overrideBy || _currentUser;
+    return who ? `├ 👷 By: <b>${who}</b>\n` : '';
 };
 
 // ==========================================
@@ -173,6 +185,9 @@ const telegram = {
     NOTIFICATION_TYPES,
     DEFAULT_PREFS,
 
+    // Set current user — call once from App.jsx when user logs in
+    setCurrentUser: (username) => { _currentUser = username || ''; },
+
     getGroupsStatus: () => {
         const result = {};
         for (const [key, group] of Object.entries(GROUPS)) {
@@ -225,7 +240,7 @@ const telegram = {
             `┌ Payment: ${paid}\n` +
             `├ Status: ${activated}\n` +
             (sale.paymentMethod ? `├ Wallet: ${sale.paymentMethod}\n` : '') +
-            (sale.moderator ? `├ By: ${sale.moderator}\n` : '') +
+            byLine(sale.moderator) +
             `└ 🕐 ${timestamp()}`;
         sendMessage('newSale', text);
     },
@@ -238,6 +253,7 @@ const telegram = {
             `👤  <b>${name}</b>\n` +
             `📦  ${sale.productName}\n` +
             (sale.customerEmail ? `📧  <code>${sale.customerEmail}</code>\n` : '') +
+            byLine() +
             `\n└ 🕐 ${timestamp()}`;
         sendMessage('saleActivated', text);
     },
@@ -250,6 +266,7 @@ const telegram = {
             `👤  <b>${name}</b>\n` +
             `📦  ${sale.productName}\n` +
             `💵  ${Number(sale.finalPrice || 0).toLocaleString()} EGP\n` +
+            byLine() +
             `\n└ 🕐 ${timestamp()}`;
         sendMessage('debtPaid', text);
     },
@@ -263,6 +280,7 @@ const telegram = {
             `📦  ${sale.productName}\n` +
             `⏱  ${duration || 30} days\n` +
             `💰  ${Number(sale.finalPrice || 0).toLocaleString()} EGP\n` +
+            byLine() +
             `\n└ 🕐 ${timestamp()}`;
         sendMessage('saleRenewed', text);
     },
@@ -273,6 +291,7 @@ const telegram = {
             `${LINE}\n\n` +
             `📂  Section: <b>${sectionName}</b>\n` +
             `📊  Quantity: <b>${count}</b> item(s)\n` +
+            byLine() +
             `\n└ 🕐 ${timestamp()}`;
         sendMessage('stockAdded', text);
     },
@@ -283,6 +302,7 @@ const telegram = {
             `${LINE}\n\n` +
             `📂  Section: <b>${sectionName}</b>\n` +
             `📧  Account: <code>${email || '-'}</code>\n` +
+            byLine() +
             `\n└ 🕐 ${timestamp()}`;
         sendMessage('inventoryPulled', text);
     },
@@ -293,6 +313,7 @@ const telegram = {
             `${LINE}\n\n` +
             `📧  ${problem.accountEmail || '-'}\n` +
             `📝  ${problem.description || '-'}\n` +
+            byLine() +
             `\n└ 🕐 ${timestamp()}`;
         sendMessage('newProblem', text);
     },
@@ -303,6 +324,7 @@ const telegram = {
             `${LINE}\n\n` +
             `📧  ${problem.accountEmail || '-'}\n` +
             `📝  ${problem.description || '-'}\n` +
+            byLine() +
             `\n└ 🕐 ${timestamp()}`;
         sendMessage('problemResolved', text);
     },
@@ -314,8 +336,57 @@ const telegram = {
             `📝  ${expense.description || '-'}\n` +
             `💰  ${Number(expense.amount || 0).toLocaleString()} EGP\n` +
             `📂  Type: ${expense.type || '-'}\n` +
+            byLine() +
             `\n└ 🕐 ${timestamp()}`;
         sendMessage('expenseAdded', text);
+    },
+
+    expenseDeleted: (expense) => {
+        const text =
+            `🗑 <b>EXPENSE DELETED</b>\n` +
+            `${LINE}\n\n` +
+            `📝  ${expense.description || '-'}\n` +
+            `💰  ${Number(expense.amount || 0).toLocaleString()} EGP\n` +
+            byLine() +
+            `\n└ 🕐 ${timestamp()}`;
+        sendMessage('expenseDeleted', text);
+    },
+
+    saleEdited: (sale) => {
+        const name = sale.customerName || sale.customerEmail || 'عميل';
+        const text =
+            `✏️ <b>SALE EDITED</b>\n` +
+            `${LINE}\n\n` +
+            `👤  <b>${name}</b>\n` +
+            `📦  ${sale.productName}\n` +
+            `💰  ${Number(sale.finalPrice || 0).toLocaleString()} EGP\n` +
+            byLine(sale.moderator) +
+            `\n└ 🕐 ${timestamp()}`;
+        sendMessage('saleEdited', text);
+    },
+
+    saleDeleted: (sale) => {
+        const name = sale.customerName || sale.customerEmail || 'عميل';
+        const text =
+            `🗑 <b>SALE DELETED</b>\n` +
+            `${LINE}\n\n` +
+            `👤  <b>${name}</b>\n` +
+            `📦  ${sale.productName || '-'}\n` +
+            `💰  ${Number(sale.finalPrice || 0).toLocaleString()} EGP\n` +
+            byLine() +
+            `\n└ 🕐 ${timestamp()}`;
+        sendMessage('saleDeleted', text);
+    },
+
+    stockReturned: (sectionName, email) => {
+        const text =
+            `🔄 <b>STOCK RETURNED</b>\n` +
+            `${LINE}\n\n` +
+            `📂  Section: <b>${sectionName}</b>\n` +
+            `📧  Account: <code>${email || '-'}</code>\n` +
+            byLine() +
+            `\n└ 🕐 ${timestamp()}`;
+        sendMessage('stockReturned', text);
     },
 
     // ========== DAILY REPORT ==========

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { salesAPI, accountsAPI, walletsAPI, customersAPI } from '../services/api';
+import telegram from '../services/telegram';
 import * as XLSX from 'xlsx';
 import { useConfirm } from './ConfirmDialog';
 
@@ -501,7 +502,7 @@ export default function Sales() {
             try {
                 // عكس المحفظة قبل الحذف
                 await reverseWalletForSale(sale);
-                await salesAPI.delete(id);
+                await salesAPI.delete(id, sale);
                 await refreshData();
             } catch (error) {
                 console.error(error);
@@ -518,13 +519,16 @@ export default function Sales() {
                 if (account) {
                     const newUses = Math.max(0, Number(account.current_uses) - 1);
                     await accountsAPI.update(account.id, { status: returnStatus, current_uses: newUses });
+                    if (returnStatus === 'available') {
+                        telegram.stockReturned(account.productName || deleteModal.productName, deleteModal.email);
+                    }
                 }
             }
             // عكس المحفظة قبل الحذف
             const sale = sales.find(s => s.id === deleteModal.saleId);
             if (sale) await reverseWalletForSale(sale);
 
-            await salesAPI.delete(deleteModal.saleId);
+            await salesAPI.delete(deleteModal.saleId, sale);
             setDeleteModal(null);
             await refreshData();
         } catch (error) {

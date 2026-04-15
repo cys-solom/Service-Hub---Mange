@@ -24,6 +24,8 @@ const groupStyles = {
     daily:       { gradient: 'from-amber-500 to-orange-600',   bgGradient: 'from-amber-50 to-orange-50',   borderColor: 'border-amber-200', textColor: 'text-amber-700', badgeBg: 'bg-amber-100', badgeText: 'text-amber-700' },
 };
 
+const GROUPS_ORDER = ['main', 'operations', 'activations', 'daily'];
+
 export default function BotSettings() {
     useEffect(() => { window.scrollTo(0, 0); }, []);
 
@@ -327,4 +329,4 @@ export default function BotSettings() {
     );
 }
 
-const GROUPS_ORDER = ['main', 'operations', 'activations', 'daily'];
+
