@@ -311,7 +311,7 @@ export default function Accounts() {
                         description: `سحب يدوي: ${sectionName} - ${acc.email} ($${costUSD} × ${usdRate})`,
                         date: new Date().toISOString().split('T')[0],
                         expenseCategory: 'daily',
-                    });
+                    }, { silent: true });
                 }
             } catch (e) { console.warn('Manual pull auto-expense error:', e); }
 

@@ -595,7 +595,7 @@ export const expensesAPI = {
         }));
     },
 
-    async create(expense) {
+    async create(expense, { silent = false } = {}) {
         const { data, error } = await supabase.from('expenses').insert({
             type: expense.type,
             amount: expense.amount,
@@ -606,7 +606,7 @@ export const expensesAPI = {
             expense_category: expense.expenseCategory || 'daily',
         }).select().single();
         if (error) throw error;
-        telegram.expenseAdded(expense);
+        if (!silent) telegram.expenseAdded(expense);
         auditLog.log('expense_create', `مصروف جديد: ${expense.description || expense.type} (${expense.amount} EGP)`, { type: expense.type, amount: expense.amount });
         return data;
     },
