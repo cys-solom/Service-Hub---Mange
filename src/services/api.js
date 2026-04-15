@@ -153,34 +153,40 @@ export const productsAPI = {
 };
 
 // ============ INVENTORY SECTIONS ============
-const SECTION_COSTS_KEY = 'service_hub_section_costs'; // local cache
+const SECTION_COSTS_KEY = 'service_hub_section_costs';
+const COSTS_DB_ACTION = '__section_costs__';
 
-// Read costs: try Supabase app_settings first, fallback to localStorage
+// Read costs: try DB first (shared), fallback to localStorage (cache)
 const _getSectionCosts = async () => {
     try {
         const { data } = await supabase
-            .from('app_settings')
-            .select('value')
-            .eq('key', 'section_costs')
+            .from('audit_logs')
+            .select('meta')
+            .eq('action', COSTS_DB_ACTION)
+            .order('created_at', { ascending: false })
+            .limit(1)
             .single();
-        if (data?.value) {
-            const costs = JSON.parse(data.value);
-            // Sync to localStorage as cache
-            localStorage.setItem(SECTION_COSTS_KEY, data.value);
-            return costs;
+        if (data?.meta) {
+            localStorage.setItem(SECTION_COSTS_KEY, JSON.stringify(data.meta));
+            return data.meta;
         }
-    } catch (e) { /* fallback to localStorage */ }
+    } catch (e) { /* fallback */ }
     try { return JSON.parse(localStorage.getItem(SECTION_COSTS_KEY) || '{}'); }
     catch { return {}; }
 };
-// Save costs: write to Supabase + localStorage
+// Save costs: write to DB (shared) + localStorage (cache)
 const _saveSectionCosts = async (map) => {
-    const json = JSON.stringify(map);
-    localStorage.setItem(SECTION_COSTS_KEY, json);
+    localStorage.setItem(SECTION_COSTS_KEY, JSON.stringify(map));
     try {
-        await supabase
-            .from('app_settings')
-            .upsert({ key: 'section_costs', value: json });
+        // Delete old cost record, insert new one
+        await supabase.from('audit_logs').delete().eq('action', COSTS_DB_ACTION);
+        await supabase.from('audit_logs').insert({
+            action: COSTS_DB_ACTION,
+            description: 'Section costs config',
+            user_name: 'system',
+            user_role: 'system',
+            meta: map,
+        });
     } catch (e) { console.warn('Failed to save costs to DB:', e); }
 };
 
