@@ -40,7 +40,7 @@ const PREFS_KEY = 'sh_telegram_group_prefs';
 // Default: main group gets sales/payments, operations gets inventory, activations gets activation, daily gets report
 const DEFAULT_PREFS = {
     main:        { newSale: true, saleEdited: true, saleDeleted: true, debtPaid: true, saleRenewed: true, saleActivated: false, stockAdded: false, stockReturned: false, inventoryPulled: false, newProblem: true, problemResolved: true, expenseAdded: false, expenseDeleted: false, dailyReport: false },
-    operations:  { newSale: false, saleEdited: false, saleDeleted: false, debtPaid: false, saleRenewed: false, saleActivated: false, stockAdded: true, stockReturned: true, inventoryPulled: true, newProblem: true, problemResolved: true, expenseAdded: true, expenseDeleted: true, dailyReport: false },
+    operations:  { newSale: false, saleEdited: false, saleDeleted: false, debtPaid: false, saleRenewed: false, saleActivated: false, stockAdded: true, stockReturned: true, inventoryPulled: true, newProblem: true, problemResolved: true, expenseAdded: false, expenseDeleted: false, dailyReport: false },
     activations: { newSale: false, saleEdited: false, saleDeleted: false, debtPaid: false, saleRenewed: false, saleActivated: true, stockAdded: false, stockReturned: false, inventoryPulled: false, newProblem: false, problemResolved: false, expenseAdded: false, expenseDeleted: false, dailyReport: false },
     daily:       { newSale: false, saleEdited: false, saleDeleted: false, debtPaid: false, saleRenewed: false, saleActivated: false, stockAdded: false, stockReturned: false, inventoryPulled: false, newProblem: false, problemResolved: false, expenseAdded: false, expenseDeleted: false, dailyReport: true },
 };

@@ -457,6 +457,50 @@ export const accountsAPI = {
         } catch (e) { console.warn('Auto-expense on pull error:', e); }
 
         return result;
+    },
+
+    // Log a past-date inventory expense manually (for missed days)
+    async logPastExpense(sectionName, targetEmail, targetDate) {
+        try {
+            let costUSD = 0;
+            let desc = '';
+            let type = 'تكلفة مخزون';
+
+            const allRecurring = _getRecurring();
+            const linkedRec = allRecurring.find(r => r.linkedSection === sectionName && r.isActive !== false);
+
+            if (linkedRec) {
+                costUSD = linkedRec.defaultAmount || 0;
+                desc = `${linkedRec.label} — سحب سابق: ${sectionName} - ${targetEmail}`;
+                type = linkedRec.type || 'تكلفة مخزون';
+            } else {
+                const allCosts = await _getSectionCosts();
+                const { data: secRow } = await supabase
+                    .from('inventory_sections').select('id').eq('name', sectionName).single();
+                if (secRow && allCosts[secRow.id] > 0) {
+                    costUSD = allCosts[secRow.id];
+                    desc = `سحب سابق: ${sectionName} - ${targetEmail}`;
+                }
+            }
+
+            if (costUSD === 0) throw new Error('لا توجد تكلفة مسجلة لهذا القسم');
+
+            const usdRate = await globalConfigAPI.fetchUsdRate();
+            const amountEGP = Math.round(costUSD * usdRate * 100) / 100;
+            desc += ` ($${costUSD} × ${usdRate})`;
+
+            const { data, error } = await supabase.from('expenses').insert({
+                type,
+                amount: amountEGP,
+                description: desc,
+                date: targetDate,
+                expense_category: 'daily',
+            }).select().single();
+            if (error) throw error;
+            return { amountEGP, usdRate, costUSD };
+        } catch (e) {
+            throw e;
+        }
     }
 };
 
@@ -671,7 +715,9 @@ export const expensesAPI = {
             expense_category: expense.expenseCategory || 'daily',
         }).select().single();
         if (error) throw error;
-        if (!silent) telegram.expenseAdded(expense);
+        // Never send telegram for inventory cost expenses
+        const isInventoryCost = expense.type === 'تكلفة مخزون';
+        if (!silent && !isInventoryCost) telegram.expenseAdded(expense);
         auditLog.log('expense_create', `مصروف جديد: ${expense.description || expense.type} (${expense.amount} EGP)`, { type: expense.type, amount: expense.amount });
         return data;
     },

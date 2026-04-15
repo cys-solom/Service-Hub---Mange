@@ -21,6 +21,7 @@ export default function Accounts() {
     const [visibleCount, setVisibleCount] = useState(20);
     const [editingSection, setEditingSection] = useState(null); // full section edit
     const [pulledResult, setPulledResult] = useState(null);
+    const [pastExpenseTarget, setPastExpenseTarget] = useState(null); // { acc, sectionName }
     const [selectedSection, setSelectedSection] = useState(null);
     // Quick links state
     const [quickLinks, setQuickLinks] = useState([]);
@@ -355,6 +356,24 @@ export default function Accounts() {
             console.error(error);
             showAlert({ title: 'خطأ', message: error?.message || 'حدث خطأ', type: 'danger' });
         }
+    };
+
+    // Log past expense for an already-pulled item
+    const handleLogPastExpense = async (acc, dateStr) => {
+        const sectionName = acc.productName || acc.product_name;
+        const loadingAlert = showAlert({ title: '⏳ جاري التسجيل...', message: '', type: 'info' });
+        try {
+            const result = await accountsAPI.logPastExpense(sectionName, acc.email, dateStr);
+            await refreshData();
+            showAlert({
+                title: '✅ تم التسجيل',
+                message: `تم تسجيل تكلفة ${result.amountEGP} ج.م ($${result.costUSD} × ${result.usdRate}) ليوم ${dateStr}`,
+                type: 'success'
+            });
+        } catch (e) {
+            showAlert({ title: 'خطأ', message: e?.message || 'حدث خطأ', type: 'danger' });
+        }
+        setPastExpenseTarget(null);
     };
 
     const handlePullNext = async (sectionName) => {
@@ -776,9 +795,14 @@ export default function Accounts() {
                                                     </button>
                                                 )}
                                                 {(acc.status === 'used' || acc.status === 'completed') && (
-                                                    <button onClick={() => handleQuickReturn(acc)} className="w-9 h-9 flex items-center justify-center text-teal-600 bg-teal-50 hover:bg-teal-100 rounded-xl transition border border-teal-100" title="إرجاع للمتاح">
-                                                        <i className="fa-solid fa-rotate-left"></i>
-                                                    </button>
+                                                    <>
+                                                        <button onClick={() => handleQuickReturn(acc)} className="w-9 h-9 flex items-center justify-center text-teal-600 bg-teal-50 hover:bg-teal-100 rounded-xl transition border border-teal-100" title="إرجاع للمتاح">
+                                                            <i className="fa-solid fa-rotate-left"></i>
+                                                        </button>
+                                                        <button onClick={() => setPastExpenseTarget({ acc, sectionName: acc.productName || acc.product_name })} className="w-9 h-9 flex items-center justify-center text-orange-600 bg-orange-50 hover:bg-orange-100 rounded-xl transition border border-orange-100" title="تسجيل مصروف يوم سابق">
+                                                            <i className="fa-solid fa-calendar-plus text-xs"></i>
+                                                        </button>
+                                                    </>
                                                 )}
                                                 <button onClick={() => setEditingAccount(acc)} className="w-9 h-9 flex items-center justify-center text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition border border-blue-100" title="تعديل"><i className="fa-solid fa-pen"></i></button>
                                                 <button onClick={() => deleteAccount(acc.id)} className="w-9 h-9 flex items-center justify-center text-red-600 bg-red-50 hover:bg-red-100 rounded-xl transition border border-red-100" title="حذف"><i className="fa-solid fa-trash"></i></button>
@@ -795,6 +819,45 @@ export default function Accounts() {
                         </div>
                     )}
                 </>
+            )}
+
+            {/* ===== PAST EXPENSE MODAL ===== */}
+            {pastExpenseTarget && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[999] p-4 animate-fade-in">
+                    <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
+                        <div className="p-6 bg-gradient-to-r from-orange-600 to-amber-500 text-white flex justify-between items-center">
+                            <h3 className="text-lg font-bold flex items-center gap-2"><i className="fa-solid fa-calendar-plus"></i> تسجيل مصروف يوم سابق</h3>
+                            <button onClick={() => setPastExpenseTarget(null)} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition"><i className="fa-solid fa-xmark"></i></button>
+                        </div>
+                        <div className="p-6 space-y-5">
+                            <p className="text-sm text-slate-600">
+                                <span className="font-bold text-slate-800">{pastExpenseTarget.sectionName}</span> — <code className="text-xs bg-slate-100 px-2 py-0.5 rounded">{pastExpenseTarget.acc.email}</code>
+                            </p>
+                            <div>
+                                <label className="block text-sm font-extrabold text-slate-800 mb-2">اختر التاريخ</label>
+                                <input
+                                    id="past-expense-date"
+                                    type="date"
+                                    defaultValue={new Date().toISOString().split('T')[0]}
+                                    max={new Date().toISOString().split('T')[0]}
+                                    className="w-full border-2 border-slate-200 rounded-xl p-3 font-bold text-sm focus:ring-4 focus:ring-orange-100 focus:border-orange-500 outline-none"
+                                />
+                            </div>
+                            <div className="flex gap-3">
+                                <button onClick={() => setPastExpenseTarget(null)} className="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition">إلغاء</button>
+                                <button
+                                    onClick={() => {
+                                        const dateVal = document.getElementById('past-expense-date').value;
+                                        if (dateVal) handleLogPastExpense(pastExpenseTarget.acc, dateVal);
+                                    }}
+                                    className="flex-1 py-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold transition"
+                                >
+                                    <i className="fa-solid fa-receipt mr-2"></i> تسجيل المصروف
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {/* ===== CREATE SECTION MODAL ===== */}
