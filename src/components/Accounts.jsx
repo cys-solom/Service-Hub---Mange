@@ -321,12 +321,12 @@ export default function Accounts() {
         }
     };
 
-    // Quick return — reset item to available
+    // Quick return — reset item to available + delete matching expense
     const handleQuickReturn = async (acc) => {
         const sectionName = acc.productName || acc.product_name;
         const confirmed = await showConfirm({
             title: 'إرجاع العنصر',
-            message: `هل تريد إرجاع "${acc.email}" إلى المتاح؟`,
+            message: `هل تريد إرجاع "${acc.email}" إلى المتاح؟ (سيتم حذف مصروف السحب لو موجود)`,
             confirmText: 'إرجاع',
             cancelText: 'إلغاء',
             type: 'warning'
@@ -335,8 +335,23 @@ export default function Accounts() {
         try {
             await accountsAPI.update(acc.id, { status: 'available', current_uses: 0 });
             telegram.stockReturned(sectionName, acc.email);
+
+            // Find and delete the matching auto-expense
+            try {
+                const allExpenses = await expensesAPI.getAll();
+                const matchingExpense = allExpenses.find(e => 
+                    e.description && 
+                    e.description.includes(sectionName) && 
+                    e.description.includes(acc.email) &&
+                    (e.description.includes('سحب تلقائي') || e.description.includes('سحب يدوي'))
+                );
+                if (matchingExpense) {
+                    await expensesAPI.delete(matchingExpense.id, matchingExpense);
+                }
+            } catch (e) { console.warn('Auto-expense delete on return error:', e); }
+
             await refreshData();
-            showAlert({ title: 'تم ✅', message: `تم إرجاع العنصر للمتاح`, type: 'success' });
+            showAlert({ title: 'تم ✅', message: `تم إرجاع العنصر للمتاح وحذف المصروف`, type: 'success' });
         } catch (error) {
             console.error(error);
             showAlert({ title: 'خطأ', message: error?.message || 'حدث خطأ', type: 'danger' });
