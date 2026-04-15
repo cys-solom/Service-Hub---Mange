@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { accountsAPI, sectionsAPI, quickLinksAPI } from '../services/api';
+import { accountsAPI, sectionsAPI, quickLinksAPI, expensesAPI } from '../services/api';
+import telegram from '../services/telegram';
 import { useConfirm } from './ConfirmDialog';
 
 export default function Accounts() {
@@ -279,6 +280,7 @@ export default function Accounts() {
 
     const handleManualPull = async (acc) => {
         if (acc.status === 'completed' || acc.status === 'damaged') return;
+        const sectionName = acc.productName || acc.product_name;
         try {
             const newUses = (acc.current_uses || 0) + 1;
             const newStatus = (acc.allowed_uses !== -1 && newUses >= acc.allowed_uses) ? 'completed' : 'used';
@@ -290,9 +292,54 @@ export default function Accounts() {
             navigator.clipboard.writeText(t);
             setCopiedId(`pull-${acc.id}`);
             setTimeout(() => setCopiedId(null), 1500);
+
+            // Send telegram notification (same as pullNext)
+            telegram.inventoryPulled(sectionName, acc.email);
+
+            // Auto-expense: read cost from localStorage
+            try {
+                const costs = JSON.parse(localStorage.getItem('service_hub_section_costs') || '{}');
+                const sections = ctxSections || [];
+                const sec = sections.find(s => s.name === sectionName);
+                const costUSD = sec ? (costs[sec.id] || 0) : 0;
+                if (costUSD > 0) {
+                    const usdRate = Number(localStorage.getItem('service_hub_usd_rate') || '50');
+                    const amountEGP = Math.round(costUSD * usdRate * 100) / 100;
+                    await expensesAPI.create({
+                        type: 'تكلفة مخزون',
+                        amount: amountEGP,
+                        description: `سحب يدوي: ${sectionName} - ${acc.email} ($${costUSD} × ${usdRate})`,
+                        date: new Date().toISOString().split('T')[0],
+                        expenseCategory: 'daily',
+                    });
+                }
+            } catch (e) { console.warn('Manual pull auto-expense error:', e); }
+
             await refreshData();
         } catch (error) {
             console.error(error);
+        }
+    };
+
+    // Quick return — reset item to available
+    const handleQuickReturn = async (acc) => {
+        const sectionName = acc.productName || acc.product_name;
+        const confirmed = await showConfirm({
+            title: 'إرجاع العنصر',
+            message: `هل تريد إرجاع "${acc.email}" إلى المتاح؟`,
+            confirmText: 'إرجاع',
+            cancelText: 'إلغاء',
+            type: 'warning'
+        });
+        if (!confirmed) return;
+        try {
+            await accountsAPI.update(acc.id, { status: 'available', current_uses: 0 });
+            telegram.stockReturned(sectionName, acc.email);
+            await refreshData();
+            showAlert({ title: 'تم ✅', message: `تم إرجاع العنصر للمتاح`, type: 'success' });
+        } catch (error) {
+            console.error(error);
+            showAlert({ title: 'خطأ', message: error?.message || 'حدث خطأ', type: 'danger' });
         }
     };
 
@@ -712,6 +759,11 @@ export default function Accounts() {
                                                 {acc.status !== 'completed' && acc.status !== 'damaged' && (
                                                     <button onClick={() => handleManualPull(acc)} className="w-9 h-9 flex items-center justify-center text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition border border-emerald-100" title="سحب مباشر">
                                                         <i className={`fa-solid ${copiedId === `pull-${acc.id}` ? 'fa-check' : 'fa-hand-holding-dollar'}`}></i>
+                                                    </button>
+                                                )}
+                                                {(acc.status === 'used' || acc.status === 'completed') && (
+                                                    <button onClick={() => handleQuickReturn(acc)} className="w-9 h-9 flex items-center justify-center text-teal-600 bg-teal-50 hover:bg-teal-100 rounded-xl transition border border-teal-100" title="إرجاع للمتاح">
+                                                        <i className="fa-solid fa-rotate-left"></i>
                                                     </button>
                                                 )}
                                                 <button onClick={() => setEditingAccount(acc)} className="w-9 h-9 flex items-center justify-center text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition border border-blue-100" title="تعديل"><i className="fa-solid fa-pen"></i></button>
