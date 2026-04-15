@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { walletsAPI } from '../services/api';
+import { walletsAPI, globalConfigAPI } from '../services/api';
 import { useConfirm } from './ConfirmDialog';
 
 const USD_RATE_KEY = 'service_hub_usd_rate';
@@ -9,7 +9,10 @@ const USD_RATE_TIMESTAMP_KEY = 'service_hub_usd_rate_timestamp';
 const RATE_CACHE_DURATION = 6 * 60 * 60 * 1000; // 6 hours
 
 const getUsdRate = () => Number(localStorage.getItem(USD_RATE_KEY) || '50');
-const saveUsdRate = (r) => { localStorage.setItem(USD_RATE_KEY, String(r)); localStorage.setItem(USD_RATE_TIMESTAMP_KEY, String(Date.now())); };
+const saveUsdRateLocalOnly = (r) => { 
+    localStorage.setItem(USD_RATE_KEY, String(r)); 
+    localStorage.setItem(USD_RATE_TIMESTAMP_KEY, String(Date.now())); 
+};
 
 const CURRENCIES = [
     { code: 'EGP', label: 'جنيه مصري', symbol: 'ج.م', flag: '🇪🇬' },
@@ -72,7 +75,8 @@ export default function Wallets() {
             }
             if (rate) {
                 const roundedRate = Math.round(rate * 100) / 100;
-                saveUsdRate(roundedRate);
+                saveUsdRateLocalOnly(roundedRate);
+                globalConfigAPI.saveUsdRate(roundedRate).catch(() => {});
                 setUsdRate(roundedRate);
                 setRateLastUpdate(new Date());
             }

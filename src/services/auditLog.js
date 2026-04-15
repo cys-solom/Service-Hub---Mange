@@ -102,7 +102,7 @@ const auditLog = {
             let query = supabase
                 .from(AUDIT_LOG_TABLE)
                 .select('*')
-                .neq('action', '__section_costs__')
+                .not('action', 'in', '("__section_costs__","__usd_rate__")')
                 .order('created_at', { ascending: false })
                 .range(offset, offset + limit - 1);
 

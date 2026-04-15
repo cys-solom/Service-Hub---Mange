@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { accountsAPI, sectionsAPI, quickLinksAPI, expensesAPI } from '../services/api';
+import { accountsAPI, sectionsAPI, quickLinksAPI, expensesAPI, globalConfigAPI } from '../services/api';
 import telegram from '../services/telegram';
 import { useConfirm } from './ConfirmDialog';
 
@@ -302,7 +302,7 @@ export default function Accounts() {
                 const sec = sections.find(s => s.name === sectionName);
                 const costUSD = sec?.costPerItem || 0;
                 if (costUSD > 0) {
-                    const usdRate = Number(localStorage.getItem('service_hub_usd_rate') || '50');
+                    const usdRate = await globalConfigAPI.fetchUsdRate();
                     const amountEGP = Math.round(costUSD * usdRate * 100) / 100;
                     await expensesAPI.create({
                         type: 'تكلفة مخزون',

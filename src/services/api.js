@@ -251,6 +251,40 @@ export const sectionsAPI = {
     }
 };
 
+// ============ GLOBAL CONFIG ============
+export const globalConfigAPI = {
+    async fetchUsdRate() {
+        try {
+            const { data } = await supabase
+                .from('audit_logs')
+                .select('meta')
+                .eq('action', '__usd_rate__')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+            if (data?.meta?.rate) {
+                localStorage.setItem('service_hub_usd_rate', String(data.meta.rate));
+                return data.meta.rate;
+            }
+        } catch (e) { /* fallback */ }
+        return Number(localStorage.getItem('service_hub_usd_rate') || '50');
+    },
+
+    async saveUsdRate(rate) {
+        localStorage.setItem('service_hub_usd_rate', String(rate));
+        try {
+            await supabase.from('audit_logs').delete().eq('action', '__usd_rate__');
+            await supabase.from('audit_logs').insert({
+                action: '__usd_rate__',
+                description: 'USD Rate Config',
+                user_name: 'system',
+                user_role: 'system',
+                meta: { rate }
+            });
+        } catch (e) { console.warn('Failed to save USD rate to DB:', e); }
+    }
+};
+
 // ============ ACCOUNTS (Inventory) ============
 export const accountsAPI = {
     async getAll() {
@@ -408,8 +442,8 @@ export const accountsAPI = {
             }
 
             if (costUSD > 0) {
-                // Convert USD to EGP using stored rate
-                const usdRate = Number(localStorage.getItem('service_hub_usd_rate') || '50');
+                // Convert USD to EGP using synced global rate
+                const usdRate = await globalConfigAPI.fetchUsdRate();
                 const amountEGP = Math.round(costUSD * usdRate * 100) / 100;
                 autoExpenseDesc += ` ($${costUSD} × ${usdRate})`;
                 await supabase.from('expenses').insert({
