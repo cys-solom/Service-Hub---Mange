@@ -5,6 +5,7 @@ import { ConfirmProvider } from './components/ConfirmDialog';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import telegram from './services/telegram';
+import { recurringExpensesAPI } from './services/api';
 
 import Dashboard from './components/Dashboard';
 import Sales from './components/Sales';
@@ -21,6 +22,7 @@ import Products from './components/Products';
 import BotSettings from './components/BotSettings';
 import Employees from './components/Employees';
 import AuditLog from './components/AuditLog';
+import Attendance from './components/Attendance';
 
 const MainLayout = () => {
   const { user } = useAuth();
@@ -30,11 +32,13 @@ const MainLayout = () => {
 
   const [isSidebarOpen, setSidebarOpen] = useState(false);
 
-  // Auto daily report scheduler - starts when user is logged in
+  // Auto daily report scheduler + migrate recurring expenses to DB
   useEffect(() => {
     if (user) {
       telegram.setCurrentUser(user.username);
       telegram.startAutoReport();
+      // ترحيل المصروفات الثابتة من localStorage للـ DB (مرة واحدة تلقائياً)
+      recurringExpensesAPI.migrateFromLocalStorage().catch(() => {});
       return () => telegram.stopAutoReport();
     } else {
       telegram.setCurrentUser('');
@@ -74,6 +78,7 @@ const MainLayout = () => {
           {activeTab === 'shifts' && checkPerm('shifts') && <Shifts />}
           {activeTab === 'wallets' && checkPerm('wallets') && <Wallets />}
           {activeTab === 'problems' && checkPerm('problems') && <Problems />}
+          {activeTab === 'attendance' && checkPerm('attendance') && <Attendance />}
           {activeTab === 'users' && (checkPerm('all') || user.role === 'admin') && <Users />}
           {activeTab === 'botSettings' && (checkPerm('botSettings') || checkPerm('all') || user.role === 'admin') && <BotSettings />}
           {activeTab === 'employees' && (checkPerm('employees') || checkPerm('all') || user.role === 'admin') && <Employees />}

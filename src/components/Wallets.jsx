@@ -8,7 +8,8 @@ const USD_RATE_KEY = 'service_hub_usd_rate';
 const USD_RATE_TIMESTAMP_KEY = 'service_hub_usd_rate_timestamp';
 const RATE_CACHE_DURATION = 6 * 60 * 60 * 1000; // 6 hours
 
-const getUsdRate = () => Number(localStorage.getItem(USD_RATE_KEY) || '50');
+// الكاش محلي فقط
+const getUsdRateLocal = () => Number(localStorage.getItem(USD_RATE_KEY) || '0');
 const saveUsdRateLocalOnly = (r) => { 
     localStorage.setItem(USD_RATE_KEY, String(r)); 
     localStorage.setItem(USD_RATE_TIMESTAMP_KEY, String(Date.now())); 
@@ -35,7 +36,7 @@ export default function Wallets() {
     const [txnType, setTxnType] = useState('deposit');
     const [selectedWallet, setSelectedWallet] = useState(null);
     const [adjustBalanceWallet, setAdjustBalanceWallet] = useState(null); // direct balance edit
-    const [usdRate, setUsdRate] = useState(getUsdRate());
+    const [usdRate, setUsdRate] = useState(getUsdRateLocal() || 50);
     const [rateLoading, setRateLoading] = useState(false);
     const [rateLastUpdate, setRateLastUpdate] = useState(null);
     const { showConfirm, showAlert } = useConfirm();
@@ -50,32 +51,49 @@ export default function Wallets() {
         }
     }, [ctxWallets, ctxTransactions]);
 
-    // Auto-fetch USD rate (stays in localStorage - it's just a cache)
+    // Auto-fetch USD rate — DB first (multi-device sync), localStorage as cache
     const fetchUsdRate = async (force = false) => {
         const lastTimestamp = Number(localStorage.getItem(USD_RATE_TIMESTAMP_KEY) || '0');
         const now = Date.now();
-        if (!force && lastTimestamp && (now - lastTimestamp) < RATE_CACHE_DURATION) {
+        const cacheValid = lastTimestamp && (now - lastTimestamp) < RATE_CACHE_DURATION;
+
+        // لو الكاش صالح ومفيش force — حمل من DB عشان سينك متعدد الأجهزة
+        if (!force && cacheValid) {
             setRateLastUpdate(new Date(lastTimestamp));
-            // Ensure the cached rate is synced globally even if we don't re-fetch from API
-            const cachedRate = getUsdRate();
-            if (cachedRate) globalConfigAPI.saveUsdRate(cachedRate).catch(() => {});
+            // تأكد إن القيمة في DB متزامنة
+            const cachedRate = getUsdRateLocal();
+            if (cachedRate > 0) globalConfigAPI.saveUsdRate(cachedRate).catch(() => {});
             return;
         }
+
         setRateLoading(true);
         try {
+            // جرب DB أول عشان يكون نفس السعر على كل الأجهزة
+            const dbRate = await globalConfigAPI.fetchUsdRate();
+            if (dbRate && dbRate > 0 && !force) {
+                saveUsdRateLocalOnly(dbRate);
+                setUsdRate(dbRate);
+                setRateLastUpdate(new Date());
+                setRateLoading(false);
+                return;
+            }
+
+            // جلب من الـ API لو force أو DB فاضي
             let rate = null;
             try {
                 const res = await fetch('https://open.er-api.com/v6/latest/USD');
                 const data = await res.json();
-                if (data && data.rates && data.rates.EGP) rate = data.rates.EGP;
-            } catch (e) { /* Primary API unavailable, trying fallback */ }
+                if (data?.rates?.EGP) rate = data.rates.EGP;
+            } catch { /* Primary API unavailable */ }
+
             if (!rate) {
                 try {
                     const res2 = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
                     const data2 = await res2.json();
-                    if (data2 && data2.rates && data2.rates.EGP) rate = data2.rates.EGP;
-                } catch (e2) { /* Fallback API also unavailable */ }
+                    if (data2?.rates?.EGP) rate = data2.rates.EGP;
+                } catch { /* Fallback unavailable */ }
             }
+
             if (rate) {
                 const roundedRate = Math.round(rate * 100) / 100;
                 saveUsdRateLocalOnly(roundedRate);
@@ -88,6 +106,7 @@ export default function Wallets() {
     };
 
     useEffect(() => { fetchUsdRate(); }, []);
+
 
     const getCurrencyInfo = (code) => CURRENCIES.find(c => c.code === code) || CURRENCIES[0];
 

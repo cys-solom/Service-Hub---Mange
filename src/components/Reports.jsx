@@ -34,6 +34,75 @@ export default function Reports () {
     const { sales, expenses, products } = useData();
 
     const [selectedProduct, setSelectedProduct] = useState(null);
+    const [exportRange, setExportRange] = useState({ from: '', to: '' });
+    const [showExportMenu, setShowExportMenu] = useState(false);
+
+    // ===== تصدير Excel =====
+    const exportToCSV = (type) => {
+        const BOM = '\uFEFF';
+        let csvContent = '';
+        const today = new Date().toLocaleDateString('ar-EG');
+
+        const filterByDate = (items) => items.filter(item => {
+            const d = item.date?.split('T')[0] || item.date || '';
+            if (exportRange.from && d < exportRange.from) return false;
+            if (exportRange.to   && d > exportRange.to)   return false;
+            return true;
+        });
+
+        if (type === 'sales') {
+            const data = filterByDate(sales);
+            csvContent = 'التاريخ,المنتج,العميل,السعر,الحالة,مفعّل\n';
+            data.forEach(s => {
+                csvContent += [
+                    s.date?.split('T')[0] || '',
+                    s.productName || '',
+                    s.customerName || s.customerEmail || '',
+                    s.finalPrice || s.sellingPrice || 0,
+                    s.isPaid ? 'مدفوع' : 'غير مدفوع',
+                    s.isActivated ? 'نعم' : 'لا',
+                ].join(',') + '\n';
+            });
+        } else if (type === 'expenses') {
+            const data = filterByDate(expenses);
+            csvContent = 'التاريخ,النوع,التصنيف,المبلغ,الوصف\n';
+            data.forEach(e => {
+                csvContent += [
+                    e.date?.split('T')[0] || '',
+                    e.type || '',
+                    e.expenseCategory === 'stock' ? 'مخزون' : 'يومي',
+                    e.amount || 0,
+                    `"${(e.description || '').replace(/"/g, '""')}"`,
+                ].join(',') + '\n';
+            });
+        } else if (type === 'summary') {
+            // ملخص شهري
+            const dataMap = {};
+            filterByDate(sales).forEach(s => {
+                const key = (s.date || '').slice(0, 7);
+                if (!dataMap[key]) dataMap[key] = { revenue: 0, expenses: 0, count: 0 };
+                dataMap[key].revenue += Number(s.finalPrice || s.sellingPrice || 0);
+                dataMap[key].count++;
+            });
+            filterByDate(expenses).forEach(e => {
+                const key = (e.date || '').slice(0, 7);
+                if (!dataMap[key]) dataMap[key] = { revenue: 0, expenses: 0, count: 0 };
+                dataMap[key].expenses += Number(e.amount || 0);
+            });
+            csvContent = 'الشهر,الإيرادات,المصروفات,صافي الربح,عدد المبيعات\n';
+            Object.entries(dataMap).sort().forEach(([month, d]) => {
+                csvContent += [month, d.revenue, d.expenses, d.revenue - d.expenses, d.count].join(',') + '\n';
+            });
+        }
+
+        const fileName = `service_hub_${type}_${today.replace(/\//g, '-')}.csv`;
+        const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = fileName; a.click();
+        URL.revokeObjectURL(url);
+        setShowExportMenu(false);
+    };
 
     // Line Chart Data
     const monthlyData = useMemo(() => {
@@ -115,11 +184,65 @@ export default function Reports () {
 
             {/* --- Header --- */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <div className="flex items-center gap-3">
-                    <div className="bg-indigo-50 p-3 rounded-xl text-indigo-600 border border-indigo-100"><i className="fa-solid fa-chart-line text-xl"></i></div>
-                    <div>
-                        <h2 className="text-2xl font-extrabold text-slate-800">التقارير</h2>
-                        <p className="text-slate-500 text-sm font-medium mt-0.5">تحليل شامل للأداء والمبيعات</p>
+                <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                        <div className="bg-indigo-50 p-3 rounded-xl text-indigo-600 border border-indigo-100"><i className="fa-solid fa-chart-line text-xl"></i></div>
+                        <div>
+                            <h2 className="text-2xl font-extrabold text-slate-800">التقارير</h2>
+                            <p className="text-slate-500 text-sm font-medium mt-0.5">تحليل شامل للأداء والمبيعات</p>
+                        </div>
+                    </div>
+
+                    {/* ===== تصدير Excel ===== */}
+                    <div className="relative">
+                        <button
+                            onClick={() => setShowExportMenu(p => !p)}
+                            className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 hover:-translate-y-0.5 transition-all flex items-center gap-2 text-sm">
+                            <i className="fa-solid fa-file-excel"></i> تصدير Excel
+                            <i className="fa-solid fa-chevron-down text-[10px]"></i>
+                        </button>
+                        {showExportMenu && (
+                            <div className="absolute left-0 top-12 bg-white rounded-2xl border border-slate-200 shadow-2xl z-50 w-72 overflow-hidden animate-fade-in">
+                                {/* نطاق التاريخ */}
+                                <div className="p-4 border-b border-slate-100 bg-slate-50">
+                                    <p className="text-xs font-bold text-slate-500 mb-3">فترة التصدير (اختياري)</p>
+                                    <div className="flex gap-2">
+                                        <div className="flex-1">
+                                            <label className="text-[10px] font-bold text-slate-400 block mb-1">من</label>
+                                            <input type="date" value={exportRange.from}
+                                                onChange={e => setExportRange(p => ({ ...p, from: e.target.value }))}
+                                                className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-bold outline-none" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <label className="text-[10px] font-bold text-slate-400 block mb-1">إلى</label>
+                                            <input type="date" value={exportRange.to}
+                                                onChange={e => setExportRange(p => ({ ...p, to: e.target.value }))}
+                                                className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-bold outline-none" />
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="p-2">
+                                    {[
+                                        { type: 'summary',  label: 'ملخص شهري',   icon: 'fa-table-cells',     color: 'text-indigo-600 bg-indigo-50' },
+                                        { type: 'sales',    label: 'سجل المبيعات',  icon: 'fa-cart-shopping',   color: 'text-emerald-600 bg-emerald-50' },
+                                        { type: 'expenses', label: 'سجل المصروفات', icon: 'fa-money-bill-wave', color: 'text-rose-600 bg-rose-50' },
+                                    ].map(item => (
+                                        <button key={item.type}
+                                            onClick={() => exportToCSV(item.type)}
+                                            className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 transition text-right">
+                                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${item.color}`}>
+                                                <i className={`fa-solid ${item.icon} text-sm`}></i>
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold text-slate-800">{item.label}</p>
+                                                <p className="text-[10px] text-slate-400">تحميل .csv يفتح في Excel</p>
+                                            </div>
+                                            <i className="fa-solid fa-download text-slate-300 text-xs mr-auto"></i>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

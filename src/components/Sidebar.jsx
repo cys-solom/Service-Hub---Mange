@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { accountsAPI } from '../services/api';
+import telegram from '../services/telegram';
 
 export default function Sidebar ({ isOpen, onClose }) {
     const { activeTab, setActiveTab, sales, accounts, sections, refreshData } = useData();
@@ -65,12 +66,17 @@ export default function Sidebar ({ isOpen, onClose }) {
 
     const totalAvailable = useMemo(() => (accounts || []).filter(a => a.status === 'available').length, [accounts]);
 
-    // Quick pull handler
+    // Quick pull handler + إشعار تيليجرام لو المخزون فضي
     const handleQuickPull = async (sectionName) => {
         try {
             const result = await accountsAPI.pullNext(sectionName);
             if (result.empty) {
                 setPullResult({ empty: true, name: sectionName });
+                // إشعار تيليجرام لو القسم فضي
+                telegram.custom(
+                    '⚠️ تنبيه: مخزون فارغ',
+                    `قسم <b>${sectionName}</b> وصل للصفر! \nيرجى إضافة مخزون جديد فوراً.`
+                );
             } else {
                 let txt = result.email;
                 if (result.password) txt += `\n${result.password}`;
@@ -78,6 +84,16 @@ export default function Sidebar ({ isOpen, onClose }) {
                 navigator.clipboard.writeText(txt);
                 setPullResult({ ...result, name: sectionName });
                 await refreshData();
+
+                // إشعار لو تبقى عنصر واحد بس (تحذير مبكر)
+                const remaining = (sections.find(s => s.name === sectionName));
+                const availCount = (accounts || []).filter(a => a.productName === sectionName && a.status === 'available').length;
+                if (availCount <= 1) {
+                    telegram.custom(
+                        '⚠️ تحذير: مخزون شارف ينتهي',
+                        `قسم <b>${sectionName}</b> تبقى فيه <b>${availCount}</b> عنصر فقط! \nأضف مخزون جديد قريباً.`
+                    );
+                }
             }
             setTimeout(() => setPullResult(null), 4000);
         } catch (error) {
@@ -88,17 +104,18 @@ export default function Sidebar ({ isOpen, onClose }) {
     const copyField = (text, id) => { navigator.clipboard.writeText(text); setCopiedField(id); setTimeout(() => setCopiedField(null), 1500); };
 
     const allTabs = [
-        { id: 'dashboard', label: 'الرئيسية', icon: 'fa-chart-pie' },
-        { id: 'sales', label: 'المبيعات', icon: 'fa-cart-shopping' },
-        { id: 'products', label: 'المنتجات', icon: 'fa-boxes-stacked' },
-        { id: 'accounts', label: 'المخزون', icon: 'fa-server' },
-        { id: 'clients', label: 'العملاء', icon: 'fa-users' },
-        { id: 'shifts', label: 'الشفتات', icon: 'fa-clock' },
-        { id: 'reports', label: 'التقارير', icon: 'fa-chart-line' },
-        { id: 'expenses', label: 'المصروفات', icon: 'fa-wallet' },
-        { id: 'wallets', label: 'المحافظ', icon: 'fa-vault' },
-        { id: 'renewals', label: 'التنبيهات', icon: 'fa-bell' },
-        { id: 'problems', label: 'المشاكل', icon: 'fa-triangle-exclamation' },
+        { id: 'dashboard',  label: 'الرئيسية',   icon: 'fa-chart-pie' },
+        { id: 'sales',      label: 'المبيعات',    icon: 'fa-cart-shopping' },
+        { id: 'products',   label: 'المنتجات',    icon: 'fa-boxes-stacked' },
+        { id: 'accounts',   label: 'المخزون',     icon: 'fa-server' },
+        { id: 'clients',    label: 'العملاء',     icon: 'fa-users' },
+        { id: 'attendance', label: 'الحضور',      icon: 'fa-fingerprint' },
+        { id: 'shifts',     label: 'الشفتات',     icon: 'fa-clock' },
+        { id: 'reports',    label: 'التقارير',    icon: 'fa-chart-line' },
+        { id: 'expenses',   label: 'المصروفات',   icon: 'fa-wallet' },
+        { id: 'wallets',    label: 'المحافظ',     icon: 'fa-vault' },
+        { id: 'renewals',   label: 'التنبيهات',   icon: 'fa-bell' },
+        { id: 'problems',   label: 'المشاكل',     icon: 'fa-triangle-exclamation' },
     ];
 
     return (

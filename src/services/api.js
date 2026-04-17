@@ -412,24 +412,28 @@ export const accountsAPI = {
         telegram.inventoryPulled(sectionName, target.email);
         auditLog.log('stock_pull', `سحب من ${sectionName}: ${target.email} (${newUses}/${maxUses === -1 ? '∞' : maxUses})`, { section: sectionName, email: target.email, uses: `${newUses}/${maxUses}` });
 
-        // Auto-add expense on pull: cost is stored in USD (localStorage), convert to EGP
+        // Auto-add expense on pull — reads from DB (not localStorage)
         try {
             let costUSD = 0;
             let autoExpenseDesc = '';
             let autoExpenseType = 'تكلفة مخزون';
 
-            // 1. Check linked recurring expenses from localStorage
-            const allRecurring = _getRecurring();
-            const linkedRec = allRecurring.find(r => r.linkedSection === sectionName && r.isActive !== false);
+            // 1. Check linked recurring expenses from DB
+            const { data: recurringRows } = await supabase
+                .from('recurring_expenses')
+                .select('*')
+                .eq('linked_section', sectionName)
+                .eq('is_active', true)
+                .limit(1);
+            const linkedRec = recurringRows?.[0] || null;
 
             if (linkedRec) {
-                costUSD = linkedRec.defaultAmount || 0;
+                costUSD = Number(linkedRec.default_amount) || 0;
                 autoExpenseDesc = `${linkedRec.label} — سحب: ${sectionName} - ${target.email}`;
                 autoExpenseType = linkedRec.type || 'تكلفة مخزون';
             } else {
                 // 2. Fallback to section cost from DB
                 const allCosts = await _getSectionCosts();
-                // Find section ID by name
                 const { data: secRow } = await supabase
                     .from('inventory_sections')
                     .select('id')
@@ -442,7 +446,6 @@ export const accountsAPI = {
             }
 
             if (costUSD > 0) {
-                // Convert USD to EGP using synced global rate
                 const usdRate = await globalConfigAPI.fetchUsdRate();
                 const amountEGP = Math.round(costUSD * usdRate * 100) / 100;
                 autoExpenseDesc += ` ($${costUSD} × ${usdRate})`;
@@ -466,11 +469,17 @@ export const accountsAPI = {
             let desc = '';
             let type = 'تكلفة مخزون';
 
-            const allRecurring = _getRecurring();
-            const linkedRec = allRecurring.find(r => r.linkedSection === sectionName && r.isActive !== false);
+            // Read from DB (not localStorage)
+            const { data: recurringRows } = await supabase
+                .from('recurring_expenses')
+                .select('*')
+                .eq('linked_section', sectionName)
+                .eq('is_active', true)
+                .limit(1);
+            const linkedRec = recurringRows?.[0] || null;
 
             if (linkedRec) {
-                costUSD = linkedRec.defaultAmount || 0;
+                costUSD = Number(linkedRec.default_amount) || 0;
                 desc = `${linkedRec.label} — سحب سابق: ${sectionName} - ${targetEmail}`;
                 type = linkedRec.type || 'تكلفة مخزون';
             } else {
@@ -741,51 +750,67 @@ export const expensesAPI = {
     }
 };
 
-// ============ RECURRING EXPENSES (localStorage) ============
-const RECURRING_KEY = 'service_hub_recurring_expenses';
-
-const _getRecurring = () => {
-    try { return JSON.parse(localStorage.getItem(RECURRING_KEY) || '[]'); }
-    catch { return []; }
-};
-const _saveRecurring = (items) => {
-    localStorage.setItem(RECURRING_KEY, JSON.stringify(items));
-};
+// ============ RECURRING EXPENSES (Supabase DB) ============
+// مخزّنة في قاعدة البيانات عشان الـ Cron Job يشوفها ويسجّلها تلقائياً
+const RECURRING_KEY = 'service_hub_recurring_expenses'; // cache key
 
 export const recurringExpensesAPI = {
     async getAll() {
-        return _getRecurring();
+        try {
+            const { data, error } = await supabase
+                .from('recurring_expenses')
+                .select('*')
+                .order('created_at', { ascending: false });
+            if (error) throw error;
+            // Map DB columns → frontend camelCase
+            return (data || []).map(r => ({
+                id: r.id,
+                label: r.label,
+                defaultAmount: Number(r.default_amount || 0),
+                type: r.type,
+                expenseCategory: r.expense_category,
+                linkedSection: r.linked_section || '',
+                isActive: r.is_active,
+                createdAt: r.created_at,
+            }));
+        } catch (e) {
+            console.warn('[recurringExpensesAPI] DB failed, using cache:', e.message);
+            try { return JSON.parse(localStorage.getItem(RECURRING_KEY) || '[]'); }
+            catch { return []; }
+        }
     },
 
     async create(item) {
         const id = 'REC-' + Date.now();
-        const items = _getRecurring();
-        items.unshift({
+        const row = {
             id,
             label: item.label,
-            defaultAmount: Number(item.defaultAmount) || 0,
-            type: item.type || 'إعلان',
-            expenseCategory: item.expenseCategory || 'daily',
-            linkedSection: item.linkedSection || '',
-            isActive: true,
-            createdAt: new Date().toISOString(),
-        });
-        _saveRecurring(items);
+            default_amount: Number(item.defaultAmount) || 0,
+            type: item.type || 'مصروف ثابت',
+            expense_category: item.expenseCategory || 'daily',
+            linked_section: item.linkedSection || '',
+            is_active: true,
+        };
+        const { error } = await supabase.from('recurring_expenses').insert(row);
+        if (error) throw error;
         return id;
     },
 
     async update(id, updates) {
-        const items = _getRecurring();
-        const idx = items.findIndex(i => i.id === id);
-        if (idx !== -1) {
-            items[idx] = { ...items[idx], ...updates };
-            _saveRecurring(items);
-        }
+        const dbUpdates = {};
+        if (updates.label !== undefined)          dbUpdates.label          = updates.label;
+        if (updates.defaultAmount !== undefined)  dbUpdates.default_amount = Number(updates.defaultAmount);
+        if (updates.type !== undefined)           dbUpdates.type           = updates.type;
+        if (updates.expenseCategory !== undefined) dbUpdates.expense_category = updates.expenseCategory;
+        if (updates.linkedSection !== undefined)  dbUpdates.linked_section = updates.linkedSection;
+        if (updates.isActive !== undefined)       dbUpdates.is_active      = updates.isActive;
+        const { error } = await supabase.from('recurring_expenses').update(dbUpdates).eq('id', id);
+        if (error) throw error;
     },
 
     async delete(id) {
-        const items = _getRecurring().filter(i => i.id !== id);
-        _saveRecurring(items);
+        const { error } = await supabase.from('recurring_expenses').delete().eq('id', id);
+        if (error) throw error;
     },
 
     // Log a recurring expense as an actual expense entry
@@ -800,6 +825,33 @@ export const recurringExpensesAPI = {
             expenseCategory: recurring.expenseCategory || 'daily',
         };
         return await expensesAPI.create(expense);
+    },
+
+    // ترحيل البيانات من localStorage للـ DB (مرة واحدة فقط)
+    async migrateFromLocalStorage() {
+        try {
+            const local = JSON.parse(localStorage.getItem(RECURRING_KEY) || '[]');
+            if (!local.length) return 0;
+            const { data: existing } = await supabase.from('recurring_expenses').select('id');
+            const existingIds = new Set((existing || []).map(r => r.id));
+            const toInsert = local.filter(r => !existingIds.has(r.id)).map(r => ({
+                id: r.id,
+                label: r.label,
+                default_amount: Number(r.defaultAmount || 0),
+                type: r.type || 'مصروف ثابت',
+                expense_category: r.expenseCategory || 'daily',
+                linked_section: r.linkedSection || '',
+                is_active: r.isActive !== false,
+            }));
+            if (toInsert.length > 0) {
+                await supabase.from('recurring_expenses').insert(toInsert);
+                console.log(`[recurringExpensesAPI] Migrated ${toInsert.length} items to DB`);
+            }
+            return toInsert.length;
+        } catch (e) {
+            console.warn('[migrateFromLocalStorage] Failed:', e.message);
+            return 0;
+        }
     }
 };
 

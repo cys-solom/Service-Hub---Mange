@@ -16,6 +16,7 @@ export default function Expenses () {
     const [showAddModal, setShowAddModal] = useState(false);
     const [editingExpense, setEditingExpense] = useState(null);
     const [categoryFilter, setCategoryFilter] = useState('all'); // all | daily | stock
+    const [dateFilter, setDateFilter] = useState({ mode: 'all', from: '', to: '' });
     const { showConfirm, showAlert } = useConfirm();
 
     // Recurring expenses
@@ -51,49 +52,10 @@ export default function Expenses () {
         return ids;
     }, [expenses, recurringItems, todayStr]);
 
-    // Auto-log at 11:55 PM — checks every minute
-    useEffect(() => {
-        if (!isAdmin) return;
-        const autoLogKey = 'service_hub_autolog_' + todayStr;
-        
-        const checkAutoLog = async () => {
-            const now = new Date();
-            const hour = now.getHours();
-            const minute = now.getMinutes();
-            
-            // Only trigger at 23:55 or later
-            if (hour < 23 || (hour === 23 && minute < 55)) return;
-            
-            // Check if already auto-logged today
-            const done = JSON.parse(localStorage.getItem(autoLogKey) || '[]');
-            
-            const items = await recurringExpensesAPI.getAll();
-            for (const rec of items) {
-                if (!rec.isActive || rec.linkedSection) continue; // skip inactive or inventory-linked
-                if (done.includes(rec.id)) continue; // already auto-logged
-                
-                // Check if manually logged today
-                const alreadyLogged = expenses.some(e => 
-                    e.date === todayStr && e.description?.includes(rec.label) && e.description?.includes('(مصروف ثابت)')
-                );
-                if (alreadyLogged) continue;
-                
-                // Auto-log with default amount
-                try {
-                    await recurringExpensesAPI.logToday(rec, rec.defaultAmount, todayStr);
-                    done.push(rec.id);
-                    localStorage.setItem(autoLogKey, JSON.stringify(done));
-                    console.log(`[Auto-log] ${rec.label}: ${rec.defaultAmount} EGP`);
-                } catch (e) { console.warn('Auto-log error:', e); }
-            }
-            
-            if (done.length > 0) await refreshData();
-        };
+    // ✅ Auto-log يومي منقول للسيرفر (Supabase Cron 11:50 PM)
+    // تم حذف الـ useEffect هنا عشان الـ Cron Job على السيرفر بيعمله تلقائياً
+    // ومنعنا التسجيل المزدوج للمصروفات الثابتة
 
-        const interval = setInterval(checkAutoLog, 60000); // every minute
-        checkAutoLog(); // check immediately
-        return () => clearInterval(interval);
-    }, [isAdmin, todayStr, expenses]);
 
     // ===== Stats =====
     const stats = useMemo(() => {
@@ -126,11 +88,35 @@ export default function Expenses () {
         return { totalAll, totalDaily, totalStock, todayDailyTotal, todayRevenue, todayProfit, consumedStockCost };
     }, [expenses, ctxAccounts, ctxSales]);
 
+    // ===== Date Filter Logic =====
+    const getDateRange = () => {
+        const now = new Date();
+        const todayStr = now.toISOString().split('T')[0];
+        if (dateFilter.mode === 'today') return { from: todayStr, to: todayStr };
+        if (dateFilter.mode === 'week') {
+            const day = now.getDay();
+            const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+            const mon = new Date(now.setDate(diff));
+            return { from: mon.toISOString().split('T')[0], to: new Date().toISOString().split('T')[0] };
+        }
+        if (dateFilter.mode === 'month') {
+            return { from: `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`, to: todayStr };
+        }
+        if (dateFilter.mode === 'custom') return { from: dateFilter.from, to: dateFilter.to };
+        return { from: '', to: '' };
+    };
+
     // ===== Filtered Expenses =====
     const filteredExpenses = useMemo(() => {
-        if (categoryFilter === 'all') return expenses;
-        return expenses.filter(e => (e.expenseCategory || 'daily') === categoryFilter);
-    }, [expenses, categoryFilter]);
+        let result = expenses;
+        // Category filter
+        if (categoryFilter !== 'all') result = result.filter(e => (e.expenseCategory || 'daily') === categoryFilter);
+        // Date filter
+        const { from, to } = getDateRange();
+        if (from) result = result.filter(e => e.date >= from);
+        if (to)   result = result.filter(e => e.date <= to);
+        return result;
+    }, [expenses, categoryFilter, dateFilter]);
 
     // خصم من المحفظة
     const deductFromWallet = async (walletId, amount, description) => {
@@ -394,36 +380,69 @@ export default function Expenses () {
                 </div>
             )}
 
-            {/* Header + Filters */}
-            <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <div>
-                    <h2 className="text-2xl font-extrabold text-slate-800">سجل المصروفات</h2>
-                    <p className="text-slate-500 text-sm font-medium mt-1">متابعة دقيقة للمصروفات التشغيلية والمخزون</p>
-                </div>
-                <div className="flex items-center gap-3 flex-wrap">
-                    {/* Category Filter */}
-                    <div className="flex bg-slate-100 p-1.5 rounded-xl border border-slate-200 shadow-inner">
-                        {[
-                            { id: 'all', label: 'الكل', icon: 'fa-layer-group' },
-                            { id: 'daily', label: 'يومي', icon: 'fa-clock' },
-                            { id: 'stock', label: 'مخزون', icon: 'fa-boxes-stacked' },
-                        ].map(f => (
-                            <button key={f.id} onClick={() => setCategoryFilter(f.id)}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-1.5 ${categoryFilter === f.id ? 'bg-white text-indigo-700 shadow-md' : 'text-slate-500 hover:bg-white/50'}`}>
-                                <i className={`fa-solid ${f.icon} text-xs`}></i>{f.label}
-                            </button>
-                        ))}
+                <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                    <div>
+                        <h2 className="text-2xl font-extrabold text-slate-800">سجل المصروفات</h2>
+                        <p className="text-slate-500 text-sm font-medium mt-1">متابعة دقيقة للمصروفات التشغيلية والمخزون</p>
                     </div>
-                    {isAdmin && (
-                    <button onClick={() => setShowRecurringModal(true)} className="bg-amber-500 text-white px-5 py-3 rounded-xl font-bold shadow-lg shadow-amber-200 hover:bg-amber-600 transition-all flex items-center gap-2">
-                        <i className="fa-solid fa-rotate"></i> مصروف ثابت
-                    </button>
-                    )}
-                    <button onClick={() => setShowAddModal(true)} className="bg-rose-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-rose-200 hover:bg-rose-700 hover:-translate-y-0.5 transition-all flex items-center gap-2">
-                        <i className="fa-solid fa-plus text-lg"></i> إضافة مصروف
-                    </button>
+                    <div className="flex items-center gap-3 flex-wrap">
+                        {/* ===== فلتر التاريخ السريع ===== */}
+                        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 shadow-inner gap-0.5">
+                            {[
+                                { id: 'all',   label: 'الكل' },
+                                { id: 'today', label: 'اليوم' },
+                                { id: 'week',  label: 'الأسبوع' },
+                                { id: 'month', label: 'الشهر' },
+                                { id: 'custom',label: '📅' },
+                            ].map(f => (
+                                <button key={f.id}
+                                    onClick={() => setDateFilter(prev => ({ ...prev, mode: f.id }))}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                        dateFilter.mode === f.id
+                                        ? 'bg-white text-indigo-700 shadow-md'
+                                        : 'text-slate-500 hover:bg-white/50'
+                                    }`}>
+                                    {f.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* فلتر مخصص */}
+                        {dateFilter.mode === 'custom' && (
+                            <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-1.5">
+                                <input type="date" value={dateFilter.from}
+                                    onChange={e => setDateFilter(p => ({ ...p, from: e.target.value }))}
+                                    className="bg-transparent text-xs font-bold text-indigo-700 outline-none" />
+                                <span className="text-indigo-400 text-xs">←</span>
+                                <input type="date" value={dateFilter.to}
+                                    onChange={e => setDateFilter(p => ({ ...p, to: e.target.value }))}
+                                    className="bg-transparent text-xs font-bold text-indigo-700 outline-none" />
+                            </div>
+                        )}
+
+                        {/* Category Filter */}
+                        <div className="flex bg-slate-100 p-1.5 rounded-xl border border-slate-200 shadow-inner">
+                            {[
+                                { id: 'all', label: 'الكل', icon: 'fa-layer-group' },
+                                { id: 'daily', label: 'يومي', icon: 'fa-clock' },
+                                { id: 'stock', label: 'مخزون', icon: 'fa-boxes-stacked' },
+                            ].map(f => (
+                                <button key={f.id} onClick={() => setCategoryFilter(f.id)}
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-1.5 ${categoryFilter === f.id ? 'bg-white text-indigo-700 shadow-md' : 'text-slate-500 hover:bg-white/50'}`}>
+                                    <i className={`fa-solid ${f.icon} text-xs`}></i>{f.label}
+                                </button>
+                            ))}
+                        </div>
+                        {isAdmin && (
+                        <button onClick={() => setShowRecurringModal(true)} className="bg-amber-500 text-white px-5 py-3 rounded-xl font-bold shadow-lg shadow-amber-200 hover:bg-amber-600 transition-all flex items-center gap-2">
+                            <i className="fa-solid fa-rotate"></i> مصروف ثابت
+                        </button>
+                        )}
+                        <button onClick={() => setShowAddModal(true)} className="bg-rose-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-rose-200 hover:bg-rose-700 hover:-translate-y-0.5 transition-all flex items-center gap-2">
+                            <i className="fa-solid fa-plus text-lg"></i> إضافة مصروف
+                        </button>
+                    </div>
                 </div>
-            </div>
 
             {/* Table */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
