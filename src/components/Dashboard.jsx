@@ -1,6 +1,8 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+
+const BIDashboard = lazy(() => import('./BIDashboard'));
 
 // ==========================================
 // Helper: استخراج تاريخ اليوم فقط (YYYY-MM-DD) بتوقيت محلي
@@ -346,12 +348,13 @@ export default function Dashboard() {
                 <div className="flex items-center gap-2 mt-4 flex-wrap">
                     {[
                         { id: 'overview', label: 'نظرة عامة', icon: 'fa-gauge-high' },
+                        { id: 'bi', label: '🧠 ذكاء الأعمال', icon: 'fa-brain' },
                         { id: 'today', label: 'تحليل اليوم', icon: 'fa-sun' },
                         { id: 'week', label: 'تحليل الأسبوع', icon: 'fa-calendar-week' },
                         { id: 'top-days', label: 'أكثر الأيام مبيعاً', icon: 'fa-ranking-star' },
                         { id: 'custom', label: 'فلتر يوم محدد', icon: 'fa-filter' },
                     ].map(s => (
-                        <button key={s.id} onClick={() => setActiveSection(s.id)} className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeSection === s.id ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'}`}>
+                        <button key={s.id} onClick={() => setActiveSection(s.id)} className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeSection === s.id ? (s.id === 'bi' ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-lg shadow-purple-200' : 'bg-indigo-600 text-white shadow-lg shadow-indigo-200') : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'}`}>
                             <i className={`fa-solid ${s.icon} text-[10px]`}></i> {s.label}
                         </button>
                     ))}
@@ -840,6 +843,15 @@ export default function Dashboard() {
                         </>
                     )}
                 </>
+            )}
+
+            {/* ========================================
+                🧠 قسم ذكاء الأعمال (BI)
+               ======================================== */}
+            {activeSection === 'bi' && (
+                <Suspense fallback={<div className="flex justify-center py-20"><div className="w-10 h-10 border-4 border-violet-200 border-t-violet-600 rounded-full animate-spin"></div></div>}>
+                    <BIDashboard />
+                </Suspense>
             )}
 
             <style>{`

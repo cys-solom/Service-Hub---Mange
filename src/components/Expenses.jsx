@@ -94,9 +94,10 @@ export default function Expenses () {
         const todayStr = now.toISOString().split('T')[0];
         if (dateFilter.mode === 'today') return { from: todayStr, to: todayStr };
         if (dateFilter.mode === 'week') {
-            const day = now.getDay();
-            const diff = now.getDate() - day + (day === 0 ? -6 : 1);
-            const mon = new Date(now.setDate(diff));
+            const today = new Date();
+            const day = today.getDay();
+            const diff = today.getDate() - day + (day === 0 ? -6 : 1);
+            const mon = new Date(today.getFullYear(), today.getMonth(), diff);
             return { from: mon.toISOString().split('T')[0], to: new Date().toISOString().split('T')[0] };
         }
         if (dateFilter.mode === 'month') {
@@ -461,7 +462,7 @@ export default function Expenses () {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {filteredExpenses.length === 0 ? (
-                                <tr><td colSpan="7" className="p-12 text-center text-slate-400 font-bold border-2 border-dashed border-slate-100 rounded-xl m-4 block">لا توجد مصروفات مسجلة</td></tr>
+                                <tr><td colSpan="7" className="p-12 text-center text-slate-400 font-bold">لا توجد مصروفات مسجلة</td></tr>
                             ) : (
                                 filteredExpenses.map(exp => {
                                     const catBadge = getCategoryBadge(exp.expenseCategory);
@@ -487,7 +488,7 @@ export default function Expenses () {
                                             </td>
                                             <td className="p-5 text-slate-600 font-medium max-w-xs truncate">{exp.description || '-'}</td>
                                             <td className="p-5 text-left pl-8 font-black text-rose-600 dir-ltr text-base">-{Number(exp.amount).toLocaleString()} <span className="text-xs text-rose-400 font-bold">EGP</span></td>
-                                            <td className="p-5 text-center flex justify-center gap-3 opacity-0 group-hover:opacity-100 transition-all duration-200">
+                                            <td className="p-5 text-center flex justify-center gap-3 md:opacity-0 md:group-hover:opacity-100 transition-all duration-200">
                                                 <button onClick={() => setEditingExpense(exp)} className="text-blue-600 bg-blue-50 hover:bg-blue-100 p-2.5 rounded-xl transition border border-blue-100 shadow-sm" title="تعديل"><i className="fa-solid fa-pen"></i></button>
                                                 <button onClick={() => handleDelete(exp.id)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 p-2.5 rounded-xl transition border border-rose-100 shadow-sm" title="حذف"><i className="fa-solid fa-trash"></i></button>
                                             </td>

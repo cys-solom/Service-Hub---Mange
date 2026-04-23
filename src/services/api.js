@@ -897,17 +897,26 @@ export const walletsAPI = {
     },
 
     async deposit(walletId, amount, description, source, by) {
-        // Get current wallet
-        const { data: wallet } = await supabase.from('wallets').select('*').eq('id', walletId).single();
-        if (!wallet) return;
+        // Use select-then-update pattern with balance validation
+        const { data: wallet, error: fetchErr } = await supabase.from('wallets').select('*').eq('id', walletId).single();
+        if (fetchErr || !wallet) {
+            console.error('Wallet not found for deposit:', walletId);
+            return null;
+        }
 
-        const newBalance = Number(wallet.balance) + Number(amount);
-        await supabase.from('wallets').update({ balance: newBalance }).eq('id', walletId);
+        const depositAmount = Math.abs(Number(amount));
+        const newBalance = Number(wallet.balance) + depositAmount;
+
+        const { error: updateErr } = await supabase.from('wallets').update({ balance: newBalance }).eq('id', walletId);
+        if (updateErr) {
+            console.error('Wallet deposit update failed:', updateErr);
+            return null;
+        }
 
         await supabase.from('wallet_transactions').insert({
             wallet_id: walletId,
             type: 'deposit',
-            amount: Number(amount),
+            amount: depositAmount,
             description,
             source: source || 'يدوي',
             balance_after: newBalance,
@@ -918,16 +927,25 @@ export const walletsAPI = {
     },
 
     async withdraw(walletId, amount, description, source, by) {
-        const { data: wallet } = await supabase.from('wallets').select('*').eq('id', walletId).single();
-        if (!wallet) return;
+        const { data: wallet, error: fetchErr } = await supabase.from('wallets').select('*').eq('id', walletId).single();
+        if (fetchErr || !wallet) {
+            console.error('Wallet not found for withdraw:', walletId);
+            return null;
+        }
 
-        const newBalance = Number(wallet.balance) - Number(amount);
-        await supabase.from('wallets').update({ balance: newBalance }).eq('id', walletId);
+        const withdrawAmount = Math.abs(Number(amount));
+        const newBalance = Number(wallet.balance) - withdrawAmount;
+
+        const { error: updateErr } = await supabase.from('wallets').update({ balance: newBalance }).eq('id', walletId);
+        if (updateErr) {
+            console.error('Wallet withdraw update failed:', updateErr);
+            return null;
+        }
 
         await supabase.from('wallet_transactions').insert({
             wallet_id: walletId,
             type: 'withdraw',
-            amount: Number(amount),
+            amount: withdrawAmount,
             description,
             source: source || 'يدوي',
             balance_after: newBalance,

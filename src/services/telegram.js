@@ -505,7 +505,11 @@ const telegram = {
     },
 
     custom: (title, body) => {
-        sendMessage('custom', `📢 <b>${title}</b>\n${LINE}\n\n${body}\n\n└ 🕐 ${timestamp()}`);
+        if (!isConfigured()) return;
+        const mainId = GROUPS.main.id;
+        if (mainId) {
+            sendToChat(mainId, `📢 <b>${title}</b>\n${LINE}\n\n${body}\n\n└ 🕐 ${timestamp()}`);
+        }
     },
 
     // ========== AUTO DAILY REPORT SCHEDULER ==========

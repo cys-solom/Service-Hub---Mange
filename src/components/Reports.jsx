@@ -31,11 +31,12 @@ export default function Reports () {
         window.scrollTo(0, 0);
     }, []);
 
-    const { sales, expenses, products } = useData();
+    const { sales, expenses, products, accounts, customers } = useData();
 
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [exportRange, setExportRange] = useState({ from: '', to: '' });
     const [showExportMenu, setShowExportMenu] = useState(false);
+    const [reportTab, setReportTab] = useState('overview'); // overview, pnl, performance
 
     // ===== تصدير Excel =====
     const exportToCSV = (type) => {
@@ -246,6 +247,236 @@ export default function Reports () {
                     </div>
                 </div>
             </div>
+
+            {/* ===== P&L FINANCIAL SUMMARY ===== */}
+            {(() => {
+                const now = new Date();
+                const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
+
+                const monthSales = (m) => sales.filter(s => (s.date || '').startsWith(m));
+                const monthExpenses = (m) => expenses.filter(e => (e.date || '').startsWith(m));
+
+                const thisRevenue = monthSales(thisMonth).reduce((s, v) => s + Number(v.finalPrice || v.sellingPrice || 0), 0);
+                const thisExpense = monthExpenses(thisMonth).reduce((s, v) => s + Number(v.amount || 0), 0);
+                const thisProfit = thisRevenue - thisExpense;
+                const thisCount = monthSales(thisMonth).length;
+
+                const prevRevenue = monthSales(prevMonth).reduce((s, v) => s + Number(v.finalPrice || v.sellingPrice || 0), 0);
+                const prevExpense = monthExpenses(prevMonth).reduce((s, v) => s + Number(v.amount || 0), 0);
+                const prevProfit = prevRevenue - prevExpense;
+                const prevCount = monthSales(prevMonth).length;
+
+                const pct = (cur, prev) => prev === 0 ? (cur > 0 ? 100 : 0) : Math.round(((cur - prev) / prev) * 100);
+                const revPct = pct(thisRevenue, prevRevenue);
+                const expPct = pct(thisExpense, prevExpense);
+                const profitPct = pct(thisProfit, prevProfit);
+                const countPct = pct(thisCount, prevCount);
+                const profitMargin = thisRevenue > 0 ? Math.round((thisProfit / thisRevenue) * 100) : 0;
+
+                // Moderator performance
+                const modPerf = {};
+                monthSales(thisMonth).forEach(s => {
+                    const mod = s.moderator || s.created_by || 'غير معروف';
+                    if (!modPerf[mod]) modPerf[mod] = { count: 0, revenue: 0 };
+                    modPerf[mod].count++;
+                    modPerf[mod].revenue += Number(s.finalPrice || s.sellingPrice || 0);
+                });
+                const modList = Object.entries(modPerf).sort((a, b) => b[1].revenue - a[1].revenue);
+
+                // Expense breakdown this month
+                const expBreakdown = {};
+                monthExpenses(thisMonth).forEach(e => {
+                    const cat = e.type || e.expenseCategory || 'أخرى';
+                    expBreakdown[cat] = (expBreakdown[cat] || 0) + Number(e.amount || 0);
+                });
+                const expList = Object.entries(expBreakdown).sort((a, b) => b[1] - a[1]);
+
+                const PctBadge = ({ value }) => (
+                    <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-lg ${value > 0 ? 'bg-emerald-100 text-emerald-700' : value < 0 ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}>
+                        {value > 0 ? `↑ ${value}%` : value < 0 ? `↓ ${Math.abs(value)}%` : '= 0%'}
+                    </span>
+                );
+
+                return (
+                    <>
+                        {/* P&L Summary Cards */}
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+                            {/* Revenue */}
+                            <div className="bg-white p-4 md:p-5 rounded-2xl border border-emerald-100 shadow-sm relative overflow-hidden group hover:shadow-md transition-all">
+                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-green-400"></div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="bg-emerald-50 text-emerald-600 w-9 h-9 rounded-xl flex items-center justify-center border border-emerald-100">
+                                        <i className="fa-solid fa-arrow-trend-up text-sm"></i>
+                                    </div>
+                                    <PctBadge value={revPct} />
+                                </div>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">الإيرادات (الشهر الحالي)</p>
+                                <p className="text-xl md:text-2xl font-black text-slate-800 dir-ltr text-right">{thisRevenue.toLocaleString()} <span className="text-sm text-slate-400">ج.م</span></p>
+                                <p className="text-[10px] text-slate-400 mt-1">{thisCount} عملية بيع</p>
+                            </div>
+
+                            {/* Expenses */}
+                            <div className="bg-white p-4 md:p-5 rounded-2xl border border-red-100 shadow-sm relative overflow-hidden group hover:shadow-md transition-all">
+                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-500 to-rose-400"></div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="bg-red-50 text-red-600 w-9 h-9 rounded-xl flex items-center justify-center border border-red-100">
+                                        <i className="fa-solid fa-arrow-trend-down text-sm"></i>
+                                    </div>
+                                    <PctBadge value={-expPct} />
+                                </div>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">المصروفات (الشهر الحالي)</p>
+                                <p className="text-xl md:text-2xl font-black text-red-600 dir-ltr text-right">{thisExpense.toLocaleString()} <span className="text-sm text-slate-400">ج.م</span></p>
+                                <p className="text-[10px] text-slate-400 mt-1">{expList.length} تصنيف</p>
+                            </div>
+
+                            {/* Net Profit */}
+                            <div className="bg-white p-4 md:p-5 rounded-2xl border border-indigo-100 shadow-sm relative overflow-hidden group hover:shadow-md transition-all">
+                                <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${thisProfit >= 0 ? 'from-indigo-500 to-blue-400' : 'from-red-500 to-orange-400'}`}></div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center border ${thisProfit >= 0 ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
+                                        <i className={`fa-solid ${thisProfit >= 0 ? 'fa-chart-line' : 'fa-chart-line fa-flip-vertical'} text-sm`}></i>
+                                    </div>
+                                    <PctBadge value={profitPct} />
+                                </div>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">صافي الربح</p>
+                                <p className={`text-xl md:text-2xl font-black dir-ltr text-right ${thisProfit >= 0 ? 'text-indigo-700' : 'text-red-600'}`}>{thisProfit.toLocaleString()} <span className="text-sm text-slate-400">ج.م</span></p>
+                            </div>
+
+                            {/* Profit Margin */}
+                            <div className="bg-white p-4 md:p-5 rounded-2xl border border-amber-100 shadow-sm relative overflow-hidden group hover:shadow-md transition-all">
+                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 to-yellow-400"></div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="bg-amber-50 text-amber-600 w-9 h-9 rounded-xl flex items-center justify-center border border-amber-100">
+                                        <i className="fa-solid fa-percent text-sm"></i>
+                                    </div>
+                                    <PctBadge value={countPct} />
+                                </div>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">هامش الربح</p>
+                                <p className="text-xl md:text-2xl font-black text-amber-700 dir-ltr text-right">{profitMargin}%</p>
+                                <p className="text-[10px] text-slate-400 mt-1">الشهر السابق: {prevRevenue > 0 ? Math.round((prevProfit / prevRevenue) * 100) : 0}%</p>
+                            </div>
+                        </div>
+
+                        {/* Moderator Performance + Expense Breakdown — side by side */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
+                            {/* Moderator Performance */}
+                            {modList.length > 0 && (
+                                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                                    <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                        <i className="fa-solid fa-ranking-star text-amber-500"></i> أداء المودريتور (الشهر الحالي)
+                                    </h3>
+                                    <div className="space-y-3">
+                                        {modList.map(([name, data], idx) => {
+                                            const maxRev = modList[0][1].revenue;
+                                            const pctBar = maxRev > 0 ? Math.round((data.revenue / maxRev) * 100) : 0;
+                                            return (
+                                                <div key={name} className="group">
+                                                    <div className="flex items-center justify-between mb-1.5">
+                                                        <div className="flex items-center gap-2">
+                                                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white font-bold text-xs ${idx === 0 ? 'bg-gradient-to-br from-amber-500 to-orange-500' : idx === 1 ? 'bg-gradient-to-br from-slate-400 to-slate-500' : 'bg-gradient-to-br from-indigo-400 to-purple-500'}`}>
+                                                                {idx + 1}
+                                                            </div>
+                                                            <span className="text-sm font-bold text-slate-700">{name}</span>
+                                                        </div>
+                                                        <div className="text-left">
+                                                            <span className="text-xs font-bold text-emerald-600">{data.revenue.toLocaleString()} ج.م</span>
+                                                            <span className="text-[10px] text-slate-400 mr-2">({data.count} بيعة)</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                                                        <div className="bg-gradient-to-r from-indigo-500 to-purple-500 h-full rounded-full transition-all duration-500" style={{ width: `${pctBar}%` }}></div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Expense Breakdown */}
+                            {expList.length > 0 && (
+                                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                                    <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                        <i className="fa-solid fa-wallet text-rose-500"></i> توزيع المصروفات (الشهر الحالي)
+                                    </h3>
+                                    <div className="space-y-2.5">
+                                        {expList.map(([cat, amount]) => {
+                                            const pctBar = thisExpense > 0 ? Math.round((amount / thisExpense) * 100) : 0;
+                                            return (
+                                                <div key={cat}>
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <span className="text-xs font-bold text-slate-600">{cat}</span>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-[10px] font-bold text-slate-400">{pctBar}%</span>
+                                                            <span className="text-xs font-bold text-red-600">{amount.toLocaleString()} ج.م</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                                                        <div className="bg-gradient-to-r from-rose-500 to-pink-400 h-full rounded-full transition-all duration-500" style={{ width: `${pctBar}%` }}></div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center">
+                                        <span className="text-xs font-bold text-slate-500">الإجمالي</span>
+                                        <span className="text-sm font-black text-red-600">{thisExpense.toLocaleString()} ج.م</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Monthly Comparison */}
+                        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                            <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                <i className="fa-solid fa-arrows-left-right text-blue-500"></i> مقارنة شهرية
+                            </h3>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm text-right">
+                                    <thead className="text-xs text-slate-400 bg-slate-50 border-b border-slate-100">
+                                        <tr>
+                                            <th className="p-3 rounded-tr-lg font-bold">المؤشر</th>
+                                            <th className="p-3 font-bold">الشهر السابق</th>
+                                            <th className="p-3 font-bold">الشهر الحالي</th>
+                                            <th className="p-3 rounded-tl-lg font-bold">التغيير</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-50">
+                                        <tr className="hover:bg-slate-50 transition">
+                                            <td className="p-3 font-bold text-slate-700"><i className="fa-solid fa-money-bill-wave text-emerald-500 ml-2"></i>الإيرادات</td>
+                                            <td className="p-3 font-bold text-slate-600 dir-ltr text-right">{prevRevenue.toLocaleString()}</td>
+                                            <td className="p-3 font-bold text-emerald-600 dir-ltr text-right">{thisRevenue.toLocaleString()}</td>
+                                            <td className="p-3"><PctBadge value={revPct} /></td>
+                                        </tr>
+                                        <tr className="hover:bg-slate-50 transition">
+                                            <td className="p-3 font-bold text-slate-700"><i className="fa-solid fa-receipt text-red-500 ml-2"></i>المصروفات</td>
+                                            <td className="p-3 font-bold text-slate-600 dir-ltr text-right">{prevExpense.toLocaleString()}</td>
+                                            <td className="p-3 font-bold text-red-600 dir-ltr text-right">{thisExpense.toLocaleString()}</td>
+                                            <td className="p-3"><PctBadge value={-expPct} /></td>
+                                        </tr>
+                                        <tr className="hover:bg-slate-50 transition">
+                                            <td className="p-3 font-bold text-slate-700"><i className="fa-solid fa-chart-line text-indigo-500 ml-2"></i>صافي الربح</td>
+                                            <td className="p-3 font-bold text-slate-600 dir-ltr text-right">{prevProfit.toLocaleString()}</td>
+                                            <td className={`p-3 font-bold dir-ltr text-right ${thisProfit >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>{thisProfit.toLocaleString()}</td>
+                                            <td className="p-3"><PctBadge value={profitPct} /></td>
+                                        </tr>
+                                        <tr className="hover:bg-slate-50 transition">
+                                            <td className="p-3 font-bold text-slate-700"><i className="fa-solid fa-cart-shopping text-blue-500 ml-2"></i>عدد المبيعات</td>
+                                            <td className="p-3 font-bold text-slate-600">{prevCount}</td>
+                                            <td className="p-3 font-bold text-blue-600">{thisCount}</td>
+                                            <td className="p-3"><PctBadge value={countPct} /></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </>
+                );
+            })()}
+
+            <hr className="border-slate-200 border-dashed" />
 
             {/* --- تحليل البرامج --- */}
             <div>

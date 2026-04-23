@@ -55,7 +55,7 @@ export default function Sidebar ({ isOpen, onClose }) {
             });
             return count;
         } catch { return 0; }
-    }, [sales, activeTab]);
+    }, [sales]);
 
     // Available counts per section
     const sectionAvailable = useMemo(() => {

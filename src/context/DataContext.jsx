@@ -162,7 +162,7 @@ export const DataProvider = ({ children }) => {
 
             setStats({
                 revenue: totalRevenue,
-                netProfit: totalRevenue,
+                netProfit: netProfit,
                 expenses: totalExpenses,
                 final: netProfit
             });

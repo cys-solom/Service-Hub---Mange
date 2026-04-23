@@ -29,6 +29,9 @@ export default defineConfig({
                 manualChunks: {
                     react: ['react', 'react-dom'], // يفصل React في ملف لوحده
                     vendor: ['swiper', 'lucide-react'], // يفصل المكتبات التقيلة
+                    charts: ['recharts', 'chart.js', 'react-chartjs-2'], // مكتبات الرسوم البيانية
+                    supabase: ['@supabase/supabase-js'], // Supabase SDK
+                    utils: ['date-fns', 'xlsx', 'bcryptjs'], // أدوات مساعدة
                 },
             },
         },

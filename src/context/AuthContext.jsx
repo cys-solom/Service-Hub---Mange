@@ -75,7 +75,17 @@ export const AuthProvider = ({ children }) => {
 
     return (
         <AuthContext.Provider value={{ user, login, logout, hasPermission, loading }}>
-            {!loading && children}
+            {loading ? (
+                <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200" style={{ direction: 'rtl', fontFamily: 'Cairo, sans-serif' }}>
+                    <div className="text-center animate-pulse">
+                        <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-200">
+                            <i className="fa-solid fa-layer-group text-2xl text-white"></i>
+                        </div>
+                        <h2 className="text-lg font-black text-slate-800">Service Hub</h2>
+                        <p className="text-sm text-slate-400 mt-1">جاري التحميل...</p>
+                    </div>
+                </div>
+            ) : children}
         </AuthContext.Provider>
     );
 };
