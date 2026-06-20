@@ -156,8 +156,10 @@ export const DataProvider = ({ children }) => {
             setProblems(problemsData);
 
             // Calculate stats
+            // تم تعطيل حساب المصروفات مؤقتاً — الأرباح تُحسب بدون خصم المصروفات
             const totalRevenue = salesData.reduce((a, b) => a + (Number(b.finalPrice || b.final_price) || 0), 0);
-            const totalExpenses = expensesData.reduce((a, b) => a + (Number(b.amount) || 0), 0);
+            // const totalExpenses = expensesData.reduce((a, b) => a + (Number(b.amount) || 0), 0);
+            const totalExpenses = 0; // معطّل — المصروفات لا تؤثر على حسابات الأرباح
             const netProfit = totalRevenue - totalExpenses;
 
             setStats({

@@ -88,19 +88,19 @@ export default function Dashboard() {
         salesWithDateStr.forEach(s => { if (s.contactChannel) channelCounts[s.contactChannel] = (channelCounts[s.contactChannel] || 0) + 1; });
         const topChannel = Object.entries(channelCounts).sort((a, b) => b[1] - a[1])[0];
 
-        // المصروفات
-        const dailyExpensesList = expenses.filter(e => (e.expenseCategory || 'daily') === 'daily');
-        const stockExpensesList = expenses.filter(e => e.expenseCategory === 'stock');
-        const totalDailyExpenses = dailyExpensesList.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
-        const totalStockExpenses = stockExpensesList.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+        // تم تعطيل خصم المصروفات من الأرباح مؤقتاً — الصفحة موجودة للتسجيل فقط
+        const dailyExpensesList = []; // expenses.filter(e => (e.expenseCategory || 'daily') === 'daily');
+        const stockExpensesList = []; // expenses.filter(e => e.expenseCategory === 'stock');
+        const totalDailyExpenses = 0; // معطّل
+        const totalStockExpenses = 0; // معطّل
 
-        const grossProfit = totalRevenue - totalDailyExpenses;
-        const netProfit = totalCollected - totalDailyExpenses;
+        const grossProfit = totalRevenue; // بدون خصم مصروفات
+        const netProfit = totalCollected;  // بدون خصم مصروفات
 
         const dailyRevenue = dailySales.reduce((sum, s) => sum + (Number(s.finalPrice) || 0), 0);
-        const todayExpenses = dailyExpensesList.filter(e => toLocalDateStr(e.date) === todayStr);
-        const todayDailyExpenses = todayExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
-        const dailyProfit = dailyRevenue - todayDailyExpenses;
+        const todayExpenses = []; // معطّل
+        const todayDailyExpenses = 0; // معطّل
+        const dailyProfit = dailyRevenue; // بدون خصم مصروفات
         const dailyCollected = dailySales.filter(s => s.isPaid).reduce((sum, s) => sum + (Number(s.finalPrice) || 0), 0);
 
         const weeklyRevenue = weeklySales.reduce((sum, s) => sum + (Number(s.finalPrice) || 0), 0);
@@ -119,7 +119,7 @@ export default function Dashboard() {
             paidCount: salesWithDateStr.filter(s => s.isPaid).length,
             unpaidCount: salesWithDateStr.filter(s => !s.isPaid).length,
         };
-    }, [salesWithDateStr, products, expenses]);
+    }, [salesWithDateStr, products]);
 
     // آخر 5 مبيعات
     const recentSales = useMemo(() => {
