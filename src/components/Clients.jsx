@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { customersAPI, salesAPI } from '../services/api';
 import { useConfirm } from './ConfirmDialog';
+import * as XLSX from 'xlsx';
 
 export default function Clients() {
     useEffect(() => { window.scrollTo(0, 0); }, []);
@@ -26,6 +27,36 @@ export default function Clients() {
     const copyToClipboard = (text) => {
         if (!text) return;
         navigator.clipboard.writeText(text);
+    };
+
+    // ======= تصدير بيانات العملاء لـ Excel =======
+    const exportClientsToExcel = () => {
+        const rows = filteredClients.map((c, idx) => ({
+            '#': idx + 1,
+            'الاسم': c.name || '',
+            'رقم التليفون': c.phone || '',
+            'البريد الإلكتروني': c.email || '',
+            'طريقة التواصل': c.contactChannel || c.contact_channel || '',
+            'عدد الأوردرات': c.ordersCount || 0,
+            'إجمالي المدفوع': c.totalSpent || 0,
+            'آخر أوردر': c.lastSale?.date ? new Date(c.lastSale.date).toLocaleDateString('ar-EG') : '',
+            'تاريخ انتهاء الاشتراك': c.expiryDate ? new Date(c.expiryDate).toLocaleDateString('ar-EG') : '',
+            'المنتجات': (c.productNames || []).join(' | '),
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+
+        // ضبط عرض الأعمدة تلقائياً
+        const colWidths = [
+            { wch: 5 }, { wch: 25 }, { wch: 18 }, { wch: 30 },
+            { wch: 15 }, { wch: 12 }, { wch: 14 }, { wch: 18 }, { wch: 20 }, { wch: 35 }
+        ];
+        ws['!cols'] = colWidths;
+
+        XLSX.utils.book_append_sheet(wb, ws, 'بيانات العملاء');
+        const date = new Date().toISOString().split('T')[0];
+        XLSX.writeFile(wb, `عملاء_${date}.xlsx`);
     };
 
     // --- Build enriched client list from customers + their sales ---
@@ -273,6 +304,18 @@ export default function Clients() {
                         <option value="newest">🆕 الأحدث</option>
                         <option value="expiringSoon">⏳ قرب الانتهاء</option>
                     </select>
+                    {/* زر تصدير Excel */}
+                    <button
+                        onClick={exportClientsToExcel}
+                        title={`تصدير ${filteredClients.length} عميل إلى Excel`}
+                        className="px-4 py-2.5 rounded-xl text-xs md:text-sm font-bold transition-all flex items-center gap-2 border bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700 shadow-md hover:shadow-lg active:scale-95"
+                    >
+                        <i className="fa-solid fa-file-excel"></i>
+                        <span>تصدير Excel</span>
+                        <span className="bg-white/20 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full">
+                            {filteredClients.length}
+                        </span>
+                    </button>
                 </div>
             </div>
 

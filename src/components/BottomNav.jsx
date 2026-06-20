@@ -7,7 +7,8 @@ const TABS = [
     { id: 'sales',      label: 'المبيعات',   icon: 'fa-cart-shopping',   color: 'from-emerald-500 to-green-600' },
     { id: 'accounts',   label: 'المخزون',    icon: 'fa-server',          color: 'from-violet-500 to-purple-600' },
     { id: 'clients',    label: 'العملاء',    icon: 'fa-users',           color: 'from-blue-500 to-cyan-600' },
-    { id: 'expenses',   label: 'المصروفات',  icon: 'fa-wallet',          color: 'from-rose-500 to-pink-600' },
+    // { id: 'expenses',   label: 'المصروفات',  icon: 'fa-wallet',          color: 'from-rose-500 to-pink-600' }, // معطّل مؤقتاً
+    { id: 'renewals',   label: 'التنبيهات',  icon: 'fa-bell',            color: 'from-amber-500 to-orange-600' },
 ];
 
 export default function BottomNav() {

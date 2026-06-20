@@ -112,7 +112,7 @@ export default function Sidebar ({ isOpen, onClose }) {
         { id: 'attendance', label: 'الحضور',      icon: 'fa-fingerprint' },
         { id: 'shifts',     label: 'الشفتات',     icon: 'fa-clock' },
         { id: 'reports',    label: 'التقارير',    icon: 'fa-chart-line' },
-        { id: 'expenses',   label: 'المصروفات',   icon: 'fa-wallet' },
+        // { id: 'expenses',   label: 'المصروفات',   icon: 'fa-wallet' }, // معطّل مؤقتاً
         { id: 'wallets',    label: 'المحافظ',     icon: 'fa-vault' },
         { id: 'renewals',   label: 'التنبيهات',   icon: 'fa-bell' },
         { id: 'problems',   label: 'المشاكل',     icon: 'fa-triangle-exclamation' },
