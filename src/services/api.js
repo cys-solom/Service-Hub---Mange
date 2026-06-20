@@ -6,6 +6,45 @@ import auditLog from './auditLog';
 // API Service - Replaces all localStorage ops
 // ==========================================
 
+// ============ HELPER: جلب كل البيانات بدون حد الـ 1000 صف ============
+// Supabase بيرجع بحد أقصى 1000 صف في كل طلب، الدالة دي بتجلب كل البيانات على دفعات
+async function fetchAllRows(tableName, queryFn) {
+    const PAGE_SIZE = 1000;
+    let allData = [];
+    let from = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+        let query = supabase
+            .from(tableName)
+            .select('*')
+            .range(from, from + PAGE_SIZE - 1);
+
+        // تطبيق أي فلاتر أو ترتيب إضافي
+        if (queryFn) query = queryFn(query);
+
+        const { data, error } = await query;
+
+        if (error) {
+            console.error(`[fetchAllRows] Error fetching ${tableName}:`, error);
+            break;
+        }
+
+        if (!data || data.length === 0) {
+            hasMore = false;
+        } else {
+            allData = allData.concat(data);
+            if (data.length < PAGE_SIZE) {
+                hasMore = false;
+            } else {
+                from += PAGE_SIZE;
+            }
+        }
+    }
+
+    return allData;
+}
+
 // ============ AUTH ============
 export const authAPI = {
     async login(username, password) {
@@ -288,10 +327,9 @@ export const globalConfigAPI = {
 // ============ ACCOUNTS (Inventory) ============
 export const accountsAPI = {
     async getAll() {
-        const { data } = await supabase
-            .from('accounts')
-            .select('*')
-            .order('created_at', { ascending: false });
+        const data = await fetchAllRows('accounts', q =>
+            q.order('created_at', { ascending: false })
+        );
         return (data || []).map(a => ({
             ...a,
             productName: a.product_name,
@@ -516,10 +554,9 @@ export const accountsAPI = {
 // ============ CUSTOMERS ============
 export const customersAPI = {
     async getAll() {
-        const { data } = await supabase
-            .from('customers')
-            .select('*')
-            .order('last_order_date', { ascending: false });
+        const data = await fetchAllRows('customers', q =>
+            q.order('last_order_date', { ascending: false })
+        );
         return (data || []).map(c => ({
             ...c,
             contactChannel: c.contact_channel,
@@ -567,10 +604,9 @@ export const customersAPI = {
 // ============ SALES ============
 export const salesAPI = {
     async getAll() {
-        const { data } = await supabase
-            .from('sales')
-            .select('*')
-            .order('date', { ascending: false });
+        const data = await fetchAllRows('sales', q =>
+            q.order('date', { ascending: false })
+        );
         return (data || []).map(s => ({
             ...s,
             productName: s.product_name,
@@ -701,10 +737,9 @@ export const salesAPI = {
 // ============ EXPENSES ============
 export const expensesAPI = {
     async getAll() {
-        const { data } = await supabase
-            .from('expenses')
-            .select('*')
-            .order('created_at', { ascending: false });
+        const data = await fetchAllRows('expenses', q =>
+            q.order('created_at', { ascending: false })
+        );
         return (data || []).map(e => ({
             ...e,
             walletId: e.wallet_id,
@@ -1107,10 +1142,9 @@ export const attendanceAPI = {
 // ============ PROBLEMS ============
 export const problemsAPI = {
     async getAll() {
-        const { data } = await supabase
-            .from('problems')
-            .select('*')
-            .order('created_at', { ascending: false });
+        const data = await fetchAllRows('problems', q =>
+            q.order('created_at', { ascending: false })
+        );
         return (data || []).map(p => ({
             ...p,
             customerName: p.customer_name,
