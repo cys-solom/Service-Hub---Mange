@@ -31,28 +31,37 @@ export default function Clients() {
 
     // ======= تصدير بيانات العملاء لـ Excel =======
     const exportClientsToExcel = () => {
+        // دالة لتنسيق رقم الهاتف مع رمز + للدولة
+        const formatPhone = (phone) => {
+            if (!phone) return '';
+            const cleaned = phone.toString().trim();
+            // لو الرقم بيبدأ بـ + بالفعل → اتركه
+            if (cleaned.startsWith('+')) return cleaned;
+            // لو بيبدأ بـ 00 → استبدلها بـ +
+            if (cleaned.startsWith('00')) return '+' + cleaned.slice(2);
+            // لو بيبدأ بـ 0 (رقم محلي مصري مثلاً) → أضف +20
+            if (cleaned.startsWith('0')) return '+2' + cleaned;
+            // غير ذلك → أضف + في الأول
+            return '+' + cleaned;
+        };
+
         const rows = filteredClients.map((c, idx) => ({
             '#': idx + 1,
             'الاسم': c.name || '',
-            'رقم التليفون': c.phone || '',
             'البريد الإلكتروني': c.email || '',
-            'طريقة التواصل': c.contactChannel || c.contact_channel || '',
-            'عدد الأوردرات': c.ordersCount || 0,
-            'إجمالي المدفوع': c.totalSpent || 0,
-            'آخر أوردر': c.lastSale?.date ? new Date(c.lastSale.date).toLocaleDateString('ar-EG') : '',
-            'تاريخ انتهاء الاشتراك': c.expiryDate ? new Date(c.expiryDate).toLocaleDateString('ar-EG') : '',
-            'المنتجات': (c.productNames || []).join(' | '),
+            'رقم الهاتف': formatPhone(c.phone),
         }));
 
         const ws = XLSX.utils.json_to_sheet(rows);
         const wb = XLSX.utils.book_new();
 
-        // ضبط عرض الأعمدة تلقائياً
-        const colWidths = [
-            { wch: 5 }, { wch: 25 }, { wch: 18 }, { wch: 30 },
-            { wch: 15 }, { wch: 12 }, { wch: 14 }, { wch: 18 }, { wch: 20 }, { wch: 35 }
+        // ضبط عرض الأعمدة
+        ws['!cols'] = [
+            { wch: 5 },   // #
+            { wch: 28 },  // الاسم
+            { wch: 32 },  // البريد الإلكتروني
+            { wch: 20 },  // رقم الهاتف
         ];
-        ws['!cols'] = colWidths;
 
         XLSX.utils.book_append_sheet(wb, ws, 'بيانات العملاء');
         const date = new Date().toISOString().split('T')[0];
