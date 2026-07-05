@@ -562,6 +562,11 @@ export const customersAPI = {
             contactChannel: c.contact_channel,
             createdAt: c.created_at,
             lastOrderDate: c.last_order_date,
+            tags: c.tags || [],
+            notes: c.notes || '',
+            lastContactDate: c.last_contact_date,
+            nextFollowUpDate: c.next_follow_up_date,
+            contactHistory: c.contact_history || [],
         }));
     },
 
@@ -598,6 +603,31 @@ export const customersAPI = {
         const updates = { last_order_date: new Date().toISOString() };
         if (email) updates.email = email;
         await supabase.from('customers').update(updates).eq('id', id);
+    },
+
+    // تحديث عام لأي حقول (تصنيفات/ملاحظات/متابعة) على عميل بالـ id
+    async updateFields(id, fields) {
+        const updates = {};
+        if (fields.tags !== undefined) updates.tags = fields.tags;
+        if (fields.notes !== undefined) updates.notes = fields.notes;
+        if (fields.lastContactDate !== undefined) updates.last_contact_date = fields.lastContactDate;
+        if (fields.nextFollowUpDate !== undefined) updates.next_follow_up_date = fields.nextFollowUpDate;
+        if (fields.contactHistory !== undefined) updates.contact_history = fields.contactHistory;
+        const { error } = await supabase.from('customers').update(updates).eq('id', id);
+        if (error) throw error;
+        auditLog.log('customer_update', `تحديث بيانات عميل: ${id}`, { id, fields: Object.keys(updates) });
+    },
+
+    // دمج عملاء مكررين في عميل أساسي واحد — بينقل كل المبيعات ويحذف النسخ المكررة
+    async mergeInto(primaryId, duplicateIds) {
+        const ids = duplicateIds.filter(id => String(id) !== String(primaryId));
+        for (const dupId of ids) {
+            const { error: reassignError } = await supabase.from('sales').update({ customer_id: primaryId }).eq('customer_id', dupId);
+            if (reassignError) throw reassignError;
+            const { error: deleteError } = await supabase.from('customers').delete().eq('id', dupId);
+            if (deleteError) throw deleteError;
+        }
+        auditLog.log('customer_merge', `دمج ${ids.length} عميل مكرر في ${primaryId}`, { primaryId, mergedIds: ids });
     }
 };
 
@@ -633,6 +663,7 @@ export const salesAPI = {
             warrantyFee: s.warranty_fee || 0,
             warrantyDays: s.warranty_days || 0,
             warrantyExpiry: s.warranty_expiry || null,
+            renewalSourceId: s.renewal_source_id || null,
         }));
     },
 
@@ -666,6 +697,7 @@ export const salesAPI = {
             workspace_email: sale.workspaceEmail || '',
             is_activated: sale.isActivated || false,
             customer_password: sale.customerPassword || '',
+            renewal_source_id: sale.renewalSourceId || null,
         };
         // لو فيه تاريخ مخصوص (تسجيل بتاريخ قديم)
         if (sale.date) {
@@ -732,6 +764,40 @@ export const salesAPI = {
         if (isActivated && saleInfo) telegram.saleActivated(saleInfo);
         auditLog.log('sale_activate', `${isActivated ? 'تفعيل' : 'إلغاء تفعيل'}: ${saleInfo?.customerName || id}`, { id, isActivated });
     }
+};
+
+// ============ SALE TEMPLATES (قوالب بيع سريعة) ============
+export const saleTemplatesAPI = {
+    async getAll() {
+        const { data, error } = await supabase.from('sale_templates').select('*').order('created_at', { ascending: false });
+        if (error) throw error;
+        return (data || []).map(t => ({
+            id: t.id,
+            name: t.name,
+            productName: t.product_name,
+            discount: t.discount,
+            warrantyFee: t.warranty_fee,
+            walletId: t.wallet_id,
+            createdBy: t.created_by,
+        }));
+    },
+
+    async create(template) {
+        const { error } = await supabase.from('sale_templates').insert({
+            name: template.name,
+            product_name: template.productName,
+            discount: template.discount || 0,
+            warranty_fee: template.warrantyFee || 0,
+            wallet_id: template.walletId || null,
+            created_by: template.createdBy || null,
+        });
+        if (error) throw error;
+    },
+
+    async remove(id) {
+        const { error } = await supabase.from('sale_templates').delete().eq('id', id);
+        if (error) throw error;
+    },
 };
 
 // ============ EXPENSES ============
@@ -1319,5 +1385,41 @@ export const employeeActionsAPI = {
     async delete(id) {
         const { error } = await supabase.from('employee_actions').delete().eq('id', id);
         if (error) throw error;
+    },
+};
+
+// ============ SETTINGS (مشاركة إعدادات بسيطة عبر audit_logs، زي section costs) ============
+const MONTHLY_TARGET_ACTION = '__monthly_target__';
+
+export const settingsAPI = {
+    // بيرجع null لو الأدمن مفيش عنده هدف مخصص — يبقى نستخدم الحساب التلقائي
+    async getMonthlyTarget() {
+        try {
+            const { data } = await supabase
+                .from('audit_logs')
+                .select('meta')
+                .eq('action', MONTHLY_TARGET_ACTION)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+            return data?.meta?.target ?? null;
+        } catch {
+            return null;
+        }
+    },
+
+    async setMonthlyTarget(target, username) {
+        await supabase.from('audit_logs').delete().eq('action', MONTHLY_TARGET_ACTION);
+        await supabase.from('audit_logs').insert({
+            action: MONTHLY_TARGET_ACTION,
+            description: 'تعديل الهدف الشهري يدويًا',
+            user_name: username || 'admin',
+            user_role: 'admin',
+            meta: { target: Number(target) || 0 },
+        });
+    },
+
+    async clearMonthlyTarget() {
+        await supabase.from('audit_logs').delete().eq('action', MONTHLY_TARGET_ACTION);
     },
 };

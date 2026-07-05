@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useData } from '../context/DataContext';
 
 export default function GlobalSearch({ onNavigate, onClose }) {
-    const { sales, customers, accounts, expenses, products, sections } = useData();
+    const { sales, customers, accounts, expenses, products, sections, setRenewalTarget } = useData();
     const [query, setQuery] = useState('');
     const [activeCategory, setActiveCategory] = useState('all');
     const inputRef = useRef(null);
@@ -20,10 +20,11 @@ export default function GlobalSearch({ onNavigate, onClose }) {
         return () => window.removeEventListener('keydown', handler);
     }, [onClose]);
 
-    const navigate = useCallback((tab, detail) => {
+    const navigate = useCallback((tab, targetClientId) => {
+        if (targetClientId) setRenewalTarget({ openClientId: targetClientId });
         onNavigate(tab);
         onClose();
-    }, [onNavigate, onClose]);
+    }, [onNavigate, onClose, setRenewalTarget]);
 
     const results = useMemo(() => {
         const q = query.trim().toLowerCase();
@@ -37,7 +38,7 @@ export default function GlobalSearch({ onNavigate, onClose }) {
             let count = 0;
             for (const s of sales) {
                 if (count >= MAX_PER) break;
-                const searchable = [s.customerName, s.customerEmail, s.productName, s.notes, s.orderNumber, String(s.finalPrice || s.sellingPrice)].join(' ').toLowerCase();
+                const searchable = [s.customerName, s.customerEmail, s.customerPhone, s.productName, s.notes, s.orderNumber, String(s.finalPrice || s.sellingPrice)].join(' ').toLowerCase();
                 if (searchable.includes(q)) {
                     items.push({
                         type: 'sale',
@@ -68,7 +69,8 @@ export default function GlobalSearch({ onNavigate, onClose }) {
                         title: c.name || c.email || '-',
                         subtitle: c.phone || c.email || '',
                         meta: `${(sales.filter(s => s.customerName === c.name || s.customerEmail === c.email)).length} طلب`,
-                        tab: 'clients'
+                        tab: 'clients',
+                        targetId: c.id
                     });
                     count++;
                 }
@@ -222,7 +224,7 @@ export default function GlobalSearch({ onNavigate, onClose }) {
                             {results.map((item, idx) => (
                                 <button
                                     key={idx}
-                                    onClick={() => navigate(item.tab)}
+                                    onClick={() => navigate(item.tab, item.targetId)}
                                     className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 transition-all group text-right"
                                 >
                                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${item.color} border border-current/10 group-hover:scale-110 transition-transform`}>

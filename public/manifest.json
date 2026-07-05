@@ -1,15 +1,28 @@
 {
   "short_name": "Service Hub",
   "name": "Service Hub — إدارة اشتراكات العملاء",
+  "description": "نظام متكامل لإدارة الاشتراكات والمبيعات والعملاء والمتابعات",
+  "lang": "ar",
+  "dir": "rtl",
   "icons": [
     {
       "src": "favicon.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ],
-  "start_url": ".",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "theme_color": "#4f46e5",
-  "background_color": "#f8fafc"
+  "background_color": "#f8fafc",
+  "categories": ["business", "productivity"]
 }

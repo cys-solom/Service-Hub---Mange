@@ -3,11 +3,12 @@ import { useData } from '../context/DataContext';
 import { salesAPI, walletsAPI } from '../services/api';
 import telegram from '../services/telegram';
 import { useConfirm } from './ConfirmDialog';
+import { buildWaLink, getTemplates, fillTemplate, saleVars } from '../utils/contact';
 
 export default function Renewals() {
     useEffect(() => { window.scrollTo(0, 0); }, []);
 
-    const { sales: ctxSales, products, wallets, refreshData } = useData();
+    const { sales: ctxSales, products, wallets, refreshData, renewalTarget, setRenewalTarget } = useData();
 
     const [sales, setSales] = useState([]);
     const [activeTab, setActiveTab] = useState('renewals');
@@ -23,6 +24,15 @@ export default function Renewals() {
     }, [ctxSales]);
 
     useEffect(() => { setVisibleCount(15); }, [activeTab]);
+
+    // فتح مودال التجديد مباشرة لو جاي من زرار "تجديد الاشتراك" في صفحة العميل
+    useEffect(() => {
+        if (renewalTarget?.openRenewSaleId) {
+            const sale = sales.find(s => String(s.id) === String(renewalTarget.openRenewSaleId));
+            if (sale) setShowRenewModal(sale);
+            setRenewalTarget(null);
+        }
+    }, [renewalTarget, sales, setRenewalTarget]);
 
     const getDaysLeft = (expiryDate) => {
         if (!expiryDate) return 999;
@@ -60,13 +70,19 @@ export default function Renewals() {
         expiring.sort((a, b) => a._daysLeft - b._daysLeft);
         unpaid.sort((a, b) => Number(b.remainingAmount) - Number(a.remainingAmount));
 
-        return { renewals, expiring, unpaid };
+        // تجديدات اتقبضت بس لسه ما اتفعلتش للعميل — محتاجة متابعة
+        const needsActivation = sales
+            .filter(sale => sale.renewalSourceId && !sale.isActivated)
+            .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        return { renewals, expiring, unpaid, needsActivation };
     }, [sales]);
 
     const currentList = useMemo(() => {
         if (activeTab === 'renewals') return alerts.renewals;
         if (activeTab === 'expired') return alerts.expiring;
         if (activeTab === 'unpaid') return alerts.unpaid;
+        if (activeTab === 'needsActivation') return alerts.needsActivation;
         return [];
     }, [activeTab, alerts]);
 
@@ -101,6 +117,7 @@ export default function Renewals() {
             fromInventory: false,
             assignedAccountEmail: '',
             assignedAccountId: null,
+            renewalSourceId: saleId,
         };
 
         try {
@@ -160,6 +177,7 @@ export default function Renewals() {
             fromInventory: false,
             assignedAccountEmail: '',
             assignedAccountId: null,
+            renewalSourceId: sale.id,
         };
 
         try {
@@ -191,8 +209,26 @@ export default function Renewals() {
         }
     };
 
+    // تفعيل تجديد اتقبض بس لسه ما اتفعلش
+    const activateRenewal = async (sale) => {
+        try {
+            await salesAPI.toggleActivated(sale.id, true, sale);
+            await refreshData();
+        } catch (error) {
+            console.error(error);
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ', type: 'danger' });
+        }
+    };
+
     const formatDate = (d) => d ? new Date(d).toLocaleDateString('en-GB') : '-';
     const getDisplayName = (sale) => sale.customerName || sale.customerEmail || 'عميل';
+
+    // فتح واتساب برسالة جاهزة حسب نوع التنبيه
+    const contactWhatsApp = (sale, templateId) => {
+        const tpl = getTemplates().find(t => t.id === templateId);
+        const msg = tpl ? fillTemplate(tpl.text, saleVars(sale)) : '';
+        window.open(buildWaLink(sale.customerPhone, msg), '_blank');
+    };
 
     // Tab styles using static classes (Tailwind can't do dynamic class names)
     const tabStyles = {
@@ -207,6 +243,10 @@ export default function Renewals() {
         unpaid: {
             active: 'bg-purple-50 text-purple-700 border border-purple-200 shadow-sm',
             badge: 'bg-purple-200 text-purple-800',
+        },
+        needsActivation: {
+            active: 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm',
+            badge: 'bg-emerald-200 text-emerald-800',
         },
     };
 
@@ -239,6 +279,7 @@ export default function Renewals() {
                     { id: 'renewals', label: 'قرب التجديد', icon: 'fa-clock', count: alerts.renewals.length },
                     { id: 'expired', label: 'منتهية', icon: 'fa-calendar-xmark', count: alerts.expiring.length },
                     { id: 'unpaid', label: 'مديونيات', icon: 'fa-hand-holding-dollar', count: alerts.unpaid.length },
+                    { id: 'needsActivation', label: 'محتاجة تفعيل', icon: 'fa-bolt', count: alerts.needsActivation.length },
                 ].map(tab => (
                     <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                         className={`flex-1 py-2.5 md:py-3 rounded-xl text-xs md:text-sm font-bold transition-all flex items-center justify-center gap-1 md:gap-2 ${activeTab === tab.id ? tabStyles[tab.id].active : 'text-slate-500 hover:bg-slate-50'}`}>
@@ -296,6 +337,13 @@ export default function Renewals() {
                         {/* Renewal Action Buttons */}
                         <div className="flex gap-2 mt-3">
                             <button
+                                onClick={(e) => { e.stopPropagation(); contactWhatsApp(sale, sale._daysLeft <= 0 ? 'expired' : 'renewal'); }}
+                                className="bg-green-600 text-white py-2 md:py-2.5 px-3 rounded-xl text-xs md:text-sm font-bold hover:bg-green-700 transition shadow-sm flex items-center justify-center gap-1.5"
+                                title="تواصل واتساب"
+                            >
+                                <i className="fa-brands fa-whatsapp text-base"></i>
+                            </button>
+                            <button
                                 onClick={(e) => { e.stopPropagation(); quickRenew(sale); }}
                                 disabled={quickRenewing === sale.id}
                                 className="flex-1 bg-emerald-600 text-white py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-bold hover:bg-emerald-700 transition shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-60"
@@ -336,8 +384,36 @@ export default function Renewals() {
                             <div className="flex justify-between"><span className="text-slate-400">تاريخ البيع:</span><span className="font-bold text-slate-700">{formatDate(sale.date)}</span></div>
                             {sale.paymentMethod && <div className="flex justify-between"><span className="text-slate-400">المحفظة:</span><span className="font-bold text-emerald-600">{sale.paymentMethod}</span></div>}
                         </div>
-                        <button onClick={() => markPaid(sale.id)} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-bold shadow-sm transition-all flex items-center justify-center gap-2">
-                            <i className="fa-solid fa-hand-holding-dollar"></i> تعليم كمدفوع
+                        <div className="flex gap-2">
+                            <button onClick={() => contactWhatsApp(sale, 'debt')} className="bg-green-600 hover:bg-green-700 text-white py-2 md:py-2.5 px-3 rounded-xl text-xs md:text-sm font-bold shadow-sm transition-all flex items-center justify-center" title="تذكير بالمديونية على واتساب">
+                                <i className="fa-brands fa-whatsapp text-base"></i>
+                            </button>
+                            <button onClick={() => markPaid(sale.id)} className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-bold shadow-sm transition-all flex items-center justify-center gap-2">
+                                <i className="fa-solid fa-hand-holding-dollar"></i> تعليم كمدفوع
+                            </button>
+                        </div>
+                    </div>
+                ))}
+
+                {/* تجديدات اتقبضت ولسه محتاجة تفعيل */}
+                {activeTab === 'needsActivation' && currentList.slice(0, visibleCount).map(sale => (
+                    <div key={sale.id} className="bg-white p-4 md:p-5 rounded-2xl border border-emerald-100 shadow-sm hover:shadow-lg transition-all duration-300 border-r-4 border-r-emerald-500">
+                        <div className="flex justify-between items-start gap-3 mb-3">
+                            <div className="min-w-0 flex-1">
+                                <h3 className="font-black text-slate-800 text-sm md:text-base truncate">{getDisplayName(sale)}</h3>
+                                {sale.customerPhone && <p className="text-[10px] md:text-xs text-slate-400 font-mono dir-ltr text-right mt-0.5">{sale.customerPhone}</p>}
+                                <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-lg font-bold mt-1 inline-block">{sale.productName}</span>
+                            </div>
+                            <div className="bg-emerald-50 text-emerald-700 text-[10px] px-2.5 py-1.5 font-bold rounded-xl flex-shrink-0">
+                                محتاج تفعيل
+                            </div>
+                        </div>
+                        <div className="bg-slate-50 rounded-xl p-2.5 md:p-3 mb-3 text-[10px] md:text-xs border border-slate-100 space-y-1">
+                            <div className="flex justify-between"><span className="text-slate-400">تاريخ التجديد:</span><span className="font-bold text-slate-700">{formatDate(sale.date)}</span></div>
+                            <div className="flex justify-between"><span className="text-slate-400">السعر:</span><span className="font-bold text-slate-700">{Number(sale.finalPrice).toLocaleString()} ج.م</span></div>
+                        </div>
+                        <button onClick={() => activateRenewal(sale)} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-bold shadow-sm transition-all flex items-center justify-center gap-2">
+                            <i className="fa-solid fa-bolt"></i> تفعيل
                         </button>
                     </div>
                 ))}

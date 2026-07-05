@@ -1,21 +1,39 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { buildWaLink, getTemplates, fillTemplate } from '../utils/contact';
+
+const SNOOZE_KEY = 'sh_snoozed_notifs';
+const loadSnoozed = () => {
+    try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) || '{}'); } catch { return {}; }
+};
 
 export default function NotificationCenter({ isOpen, onClose, onNavigate }) {
     const { sales, accounts, sections, expenses, customers } = useData();
     const { user } = useAuth();
-    const [filter, setFilter] = useState('all'); // all, urgent, stock, money, renewals
+    const [filter, setFilter] = useState('all'); // all, urgent, stock, money, renewals, followup
     const [dismissedIds, setDismissedIds] = useState(() => {
         try {
             return JSON.parse(localStorage.getItem('sh_dismissed_notifs') || '[]');
         } catch { return []; }
     });
+    // خريطة { id: تاريخ انتهاء التأجيل } — الإشعار يختفي لحد ما يعدّي الوقت ده
+    const [snoozed, setSnoozed] = useState(loadSnoozed);
 
     const dismiss = useCallback((id) => {
         setDismissedIds(prev => {
             const next = [...prev, id];
             localStorage.setItem('sh_dismissed_notifs', JSON.stringify(next.slice(-200))); // keep last 200
+            return next;
+        });
+    }, []);
+
+    // تأجيل الإشعار عدد معين من الأيام
+    const snooze = useCallback((id, days) => {
+        const until = new Date(Date.now() + days * 86400000).toISOString();
+        setSnoozed(prev => {
+            const next = { ...prev, [id]: until };
+            localStorage.setItem(SNOOZE_KEY, JSON.stringify(next));
             return next;
         });
     }, []);
@@ -51,6 +69,14 @@ export default function NotificationCenter({ isOpen, onClose, onNavigate }) {
                     message: `${sale.productName} — ${sale.customerName || sale.customerEmail || 'بدون اسم'} ${daysLeft <= 0 ? `(منتهي من ${Math.abs(daysLeft)} يوم)` : `(باقي ${daysLeft} يوم)`}`,
                     time: sale.expiryDate,
                     tab: 'renewals',
+                    phone: sale.customerPhone,
+                    waTemplateId: daysLeft <= 0 ? 'expired' : 'renewal',
+                    waVars: {
+                        name: sale.customerName || sale.customerEmail || 'عميلنا العزيز',
+                        product: sale.productName || '',
+                        expiry: sale.expiryDate ? new Date(sale.expiryDate).toLocaleDateString('en-GB') : '',
+                        days: Math.abs(daysLeft),
+                    },
                     dismissed: dismissedIds.includes(id)
                 });
             }
@@ -72,6 +98,13 @@ export default function NotificationCenter({ isOpen, onClose, onNavigate }) {
                 message: `${sale.productName} — متبقي ${remaining.toLocaleString()} ج.م`,
                 time: sale.date,
                 tab: 'sales',
+                phone: sale.customerPhone,
+                waTemplateId: 'debt',
+                waVars: {
+                    name: sale.customerName || sale.customerEmail || 'عميلنا العزيز',
+                    product: sale.productName || '',
+                    remaining: remaining.toLocaleString(),
+                },
                 dismissed: dismissedIds.includes(id)
             });
         });
@@ -130,10 +163,37 @@ export default function NotificationCenter({ isOpen, onClose, onNavigate }) {
             });
         }
 
+        // === 5. Follow-ups Due (متابعات مستحقة من صفحة العملاء) ===
+        customers.forEach(cust => {
+            if (!cust.nextFollowUpDate) return;
+            if (cust.nextFollowUpDate > todayStr) return; // لسه ما جاش موعدها
+            const id = `followup-${cust.id}-${cust.nextFollowUpDate}`;
+            const overdue = cust.nextFollowUpDate < todayStr;
+            notifs.push({
+                id,
+                type: 'followup',
+                priority: overdue ? 'high' : 'medium',
+                icon: 'fa-phone-volume',
+                color: overdue ? 'text-rose-600 bg-rose-50 border-rose-200' : 'text-teal-600 bg-teal-50 border-teal-200',
+                title: `📞 متابعة مستحقة — ${cust.name || cust.email || 'عميل'}`,
+                message: overdue
+                    ? `كان مفروض تتابعه بتاريخ ${new Date(cust.nextFollowUpDate).toLocaleDateString('en-GB')}`
+                    : 'موعد متابعة العميل النهاردة',
+                time: cust.nextFollowUpDate,
+                tab: 'clients',
+                phone: cust.phone,
+                waTemplateId: 'followup',
+                waVars: { name: cust.name || cust.email || 'عميلنا العزيز' },
+                dismissed: dismissedIds.includes(id)
+            });
+        });
+
         // Sort: critical first, then by type priority
         const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-        return notifs.sort((a, b) => (priorityOrder[a.priority] || 3) - (priorityOrder[b.priority] || 3));
-    }, [sales, accounts, sections, customers, dismissedIds]);
+        return notifs
+            .filter(n => !snoozed[n.id] || new Date(snoozed[n.id]) <= today) // اخفي المؤجّلة
+            .sort((a, b) => (priorityOrder[a.priority] || 3) - (priorityOrder[b.priority] || 3));
+    }, [sales, accounts, sections, customers, dismissedIds, snoozed]);
 
     const activeNotifs = useMemo(() => notifications.filter(n => !n.dismissed), [notifications]);
     const filteredNotifs = useMemo(() => {
@@ -147,6 +207,7 @@ export default function NotificationCenter({ isOpen, onClose, onNavigate }) {
         stock: activeNotifs.filter(n => n.type === 'stock').length,
         money: activeNotifs.filter(n => n.type === 'money').length,
         renewals: activeNotifs.filter(n => n.type === 'renewals').length,
+        followup: activeNotifs.filter(n => n.type === 'followup').length,
     }), [activeNotifs]);
 
     if (!isOpen) return null;
@@ -157,6 +218,7 @@ export default function NotificationCenter({ isOpen, onClose, onNavigate }) {
         { id: 'stock',    label: 'المخزون',    icon: 'fa-boxes-stacked' },
         { id: 'money',    label: 'مالية',      icon: 'fa-money-bill-wave' },
         { id: 'renewals', label: 'التجديدات',  icon: 'fa-clock' },
+        { id: 'followup', label: 'المتابعات',  icon: 'fa-phone-volume' },
     ];
 
     return (
@@ -240,6 +302,43 @@ export default function NotificationCenter({ isOpen, onClose, onNavigate }) {
                                         <i className="fa-solid fa-xmark text-xs"></i>
                                     </button>
                                 </div>
+
+                                {/* أزرار الإجراء: واتساب + تأجيل */}
+                                {(notif.waTemplateId || notif.type !== 'stock') && (
+                                    <div className="flex items-center gap-1.5 mt-2.5 pt-2.5 border-t border-white/60">
+                                        {notif.waTemplateId && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    const tpl = getTemplates().find(t => t.id === notif.waTemplateId);
+                                                    const msg = tpl ? fillTemplate(tpl.text, notif.waVars) : '';
+                                                    window.open(buildWaLink(notif.phone, msg), '_blank');
+                                                }}
+                                                className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg transition"
+                                                title={notif.phone ? 'تواصل واتساب' : 'اختر جهة الاتصال في واتساب'}
+                                            >
+                                                <i className="fa-brands fa-whatsapp text-xs"></i> واتساب
+                                            </button>
+                                        )}
+                                        <div className="flex items-center gap-1 mr-auto">
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); snooze(notif.id, 1); }}
+                                                className="bg-white/70 hover:bg-white text-slate-500 hover:text-slate-700 text-[10px] font-bold px-2 py-1.5 rounded-lg transition"
+                                                title="ذكّرني بكرة"
+                                            >
+                                                <i className="fa-solid fa-clock-rotate-left text-[10px] ml-0.5"></i> يوم
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); snooze(notif.id, 3); }}
+                                                className="bg-white/70 hover:bg-white text-slate-500 hover:text-slate-700 text-[10px] font-bold px-2 py-1.5 rounded-lg transition"
+                                                title="ذكّرني بعد 3 أيام"
+                                            >
+                                                3 أيام
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {notif.priority === 'critical' && (
                                     <div className="absolute top-2 left-2 w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></div>
                                 )}
@@ -272,33 +371,42 @@ export default function NotificationCenter({ isOpen, onClose, onNavigate }) {
 
 // Export helper to get notification count (used in App header)
 export function useNotificationCount() {
-    const { sales, accounts, sections } = useData();
+    const { sales, accounts, sections, customers } = useData();
     return useMemo(() => {
         let count = 0;
         const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
+        const snoozed = loadSnoozed();
+        const isSnoozed = (id) => snoozed[id] && new Date(snoozed[id]) > today;
 
         // Expiring
         sales.forEach(sale => {
             if (sale.renewal_stage === 'renewed') return;
             if (!sale.expiryDate) return;
             const daysLeft = Math.ceil((new Date(sale.expiryDate) - today) / 86400000);
-            if (daysLeft <= 5 && daysLeft >= -30) count++;
+            if (daysLeft <= 5 && daysLeft >= -30 && !isSnoozed(`renewal-${sale.id}`)) count++;
         });
 
         // Unpaid
         sales.forEach(sale => {
             if (sale.isPaid) return;
-            if (Number(sale.remainingAmount || 0) > 0) count++;
+            if (Number(sale.remainingAmount || 0) > 0 && !isSnoozed(`unpaid-${sale.id}`)) count++;
         });
 
         // Low stock
         if (sections && accounts) {
             sections.forEach(sec => {
                 const available = accounts.filter(a => a.productName === sec.name && a.status === 'available').length;
-                if (available <= 3) count++;
+                if (available <= 3 && !isSnoozed(`stock-${sec.id}-${available}`)) count++;
             });
         }
 
+        // Follow-ups due
+        (customers || []).forEach(cust => {
+            if (!cust.nextFollowUpDate || cust.nextFollowUpDate > todayStr) return;
+            if (!isSnoozed(`followup-${cust.id}-${cust.nextFollowUpDate}`)) count++;
+        });
+
         return count;
-    }, [sales, accounts, sections]);
+    }, [sales, accounts, sections, customers]);
 }

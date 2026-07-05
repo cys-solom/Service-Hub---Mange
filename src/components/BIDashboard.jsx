@@ -1,12 +1,37 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { settingsAPI } from '../services/api';
 
 const toDateStr = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; };
 
 export default function BIDashboard() {
     const { sales, expenses, customers, accounts, sections } = useData();
     const { user } = useAuth();
+    const isAdmin = user?.role === 'admin';
+
+    // ===== هدف شهري مخصص (اختياري) — الأدمن يقدر يعدله يدويًا بدل الحساب التلقائي =====
+    const [customTarget, setCustomTarget] = useState(null);
+    const [editingTarget, setEditingTarget] = useState(false);
+    const [targetInput, setTargetInput] = useState('');
+
+    useEffect(() => {
+        settingsAPI.getMonthlyTarget().then(setCustomTarget).catch(() => {});
+    }, []);
+
+    const saveCustomTarget = async () => {
+        const value = Number(targetInput);
+        if (!value || value <= 0) return;
+        await settingsAPI.setMonthlyTarget(value, user?.username);
+        setCustomTarget(value);
+        setEditingTarget(false);
+    };
+
+    const resetCustomTarget = async () => {
+        await settingsAPI.clearMonthlyTarget();
+        setCustomTarget(null);
+        setEditingTarget(false);
+    };
 
     // ===== Revenue Forecast (linear regression on last 6 months) =====
     const forecast = useMemo(() => {
@@ -47,10 +72,28 @@ export default function BIDashboard() {
         const prev = new Date(now.getFullYear(), now.getMonth()-1, 1);
         const prevKey = `${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,'0')}`;
         const prevRev = sales.filter(s => (s.date||'').startsWith(prevKey)).reduce((s,v) => s+Number(v.finalPrice||v.sellingPrice||0), 0);
-        const target = Math.max(prevRev, 1);
+        // لو الأدمن حاطط هدف مخصص، بيتفضّل على الحساب التلقائي من إيراد الشهر اللي فات
+        const target = customTarget && customTarget > 0 ? customTarget : Math.max(prevRev, 1);
+        const isCustom = !!(customTarget && customTarget > 0);
         const pct = Math.min(Math.round((monthRev/target)*100), 200);
         const dailyNeeded = daysInMonth-dayOfMonth > 0 ? Math.round((target-monthRev)/(daysInMonth-dayOfMonth)) : 0;
-        return { monthRev, monthCount, target, pct, dayOfMonth, daysInMonth, dailyNeeded, prevRev };
+        return { monthRev, monthCount, target, pct, dayOfMonth, daysInMonth, dailyNeeded, prevRev, isCustom };
+    }, [sales, customTarget]);
+
+    // ===== Moderator Performance (هذا الشهر) =====
+    const moderatorPerf = useMemo(() => {
+        const now = new Date();
+        const monthKey = toDateStr(now).slice(0,7);
+        const perf = {};
+        sales.filter(s => (s.date||'').startsWith(monthKey)).forEach(s => {
+            const mod = s.moderator || 'غير معروف';
+            if (!perf[mod]) perf[mod] = { count: 0, revenue: 0 };
+            perf[mod].count++;
+            perf[mod].revenue += Number(s.finalPrice || s.sellingPrice || 0);
+        });
+        const list = Object.entries(perf).map(([name, v]) => ({ name, ...v })).sort((a,b) => b.revenue - a.revenue);
+        const maxRevenue = Math.max(...list.map(m => m.revenue), 1);
+        return { list, maxRevenue };
     }, [sales]);
 
     // ===== Heatmap (day of week × time of day) =====
@@ -185,7 +228,25 @@ export default function BIDashboard() {
 
                 {/* Target Progress */}
                 <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                    <h3 className="text-sm font-extrabold text-slate-800 flex items-center gap-2 mb-4"><i className="fa-solid fa-bullseye text-rose-500"></i> هدف الشهر</h3>
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-extrabold text-slate-800 flex items-center gap-2">
+                            <i className="fa-solid fa-bullseye text-rose-500"></i> هدف الشهر
+                            {targets.isCustom && <span className="text-[9px] bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded-full font-bold border border-rose-100">مخصص</span>}
+                        </h3>
+                        {isAdmin && !editingTarget && (
+                            <button onClick={() => { setTargetInput(String(targets.target)); setEditingTarget(true); }} className="text-[11px] font-bold text-slate-400 hover:text-indigo-600 transition flex items-center gap-1">
+                                <i className="fa-solid fa-pen"></i> تعديل
+                            </button>
+                        )}
+                    </div>
+                    {editingTarget && (
+                        <div className="flex items-center gap-2 mb-4 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                            <input type="number" value={targetInput} onChange={e => setTargetInput(e.target.value)} placeholder="الهدف بالجنيه" className="flex-1 bg-white border-2 border-slate-200 rounded-lg px-3 py-1.5 text-sm font-bold outline-none focus:border-indigo-400" />
+                            <button onClick={saveCustomTarget} className="bg-indigo-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg hover:bg-indigo-700 transition">حفظ</button>
+                            {targets.isCustom && <button onClick={resetCustomTarget} className="bg-slate-200 text-slate-600 text-xs font-bold px-3 py-1.5 rounded-lg hover:bg-slate-300 transition">تلقائي</button>}
+                            <button onClick={() => setEditingTarget(false)} className="text-slate-400 hover:text-slate-600 px-1.5"><i className="fa-solid fa-xmark"></i></button>
+                        </div>
+                    )}
                     <div className="relative mb-4">
                         <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1"><span>0</span><span>هدف: {targets.target.toLocaleString()}</span></div>
                         <div className="w-full bg-slate-100 rounded-full h-6 overflow-hidden">
@@ -254,6 +315,27 @@ export default function BIDashboard() {
                     </div>
                 </div>
             </div>
+
+            {/* Moderator Performance (هذا الشهر) */}
+            {moderatorPerf.list.length > 0 && (
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                    <h3 className="text-sm font-extrabold text-slate-800 flex items-center gap-2 mb-4"><i className="fa-solid fa-people-arrows text-cyan-500"></i> أداء الفريق (الشهر الحالي)</h3>
+                    <div className="space-y-2.5">
+                        {moderatorPerf.list.map((m, i) => (
+                            <div key={m.name} className="flex items-center gap-3">
+                                <span className={`w-6 text-center text-[10px] font-black ${i===0?'text-amber-500':'text-slate-300'}`}>{i===0?'🏆':`#${i+1}`}</span>
+                                <span className="w-24 truncate text-xs font-bold text-slate-600">{m.name}</span>
+                                <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden">
+                                    <div className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all flex items-center justify-end px-2" style={{ width: `${(m.revenue / moderatorPerf.maxRevenue) * 100}%` }}>
+                                        <span className="text-[9px] font-black text-white">{m.revenue.toLocaleString()}</span>
+                                    </div>
+                                </div>
+                                <span className="w-14 text-left text-[10px] font-bold text-slate-400">{m.count} بيعة</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Customer Intelligence */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">

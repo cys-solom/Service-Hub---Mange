@@ -2,12 +2,13 @@ import { useState, useMemo, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { customersAPI, salesAPI } from '../services/api';
 import { useConfirm } from './ConfirmDialog';
+import { buildWaLink, getTemplates, saveTemplates, fillTemplate, saleVars, DEFAULT_TEMPLATES } from '../utils/contact';
 import * as XLSX from 'xlsx';
 
 export default function Clients() {
     useEffect(() => { window.scrollTo(0, 0); }, []);
 
-    const { sales: ctxSales, customers: ctxCustomers, refreshData } = useData();
+    const { sales: ctxSales, customers: ctxCustomers, refreshData, setActiveTab, renewalTarget, setRenewalTarget } = useData();
 
     const [sales, setSales] = useState([]);
     const [customers, setCustomers] = useState([]);
@@ -17,7 +18,19 @@ export default function Clients() {
     const [editingClient, setEditingClient] = useState(null);
     const [visibleCount, setVisibleCount] = useState(25);
     const [showDuplicatesOnly, setShowDuplicatesOnly] = useState(false);
+    const [showFollowUpDueOnly, setShowFollowUpDueOnly] = useState(false);
+    const [mergeGroup, setMergeGroup] = useState(null); // array of duplicate clients
+    const [mergePrimaryId, setMergePrimaryId] = useState('');
+    const [merging, setMerging] = useState(false);
+    const [newTagInput, setNewTagInput] = useState('');
+    const [contactNote, setContactNote] = useState('');
+    const [showTemplateEditor, setShowTemplateEditor] = useState(false);
+    const [templates, setTemplates] = useState(() => getTemplates());
     const { showConfirm, showAlert } = useConfirm();
+
+    const CONTACT_RESULTS = ['تم التواصل', 'مهتم', 'أجّل', 'لم يرد', 'رفض'];
+
+    const PRESET_TAGS = ['VIP', 'متابعة', 'مشكلة'];
 
     useEffect(() => {
         setSales(ctxSales);
@@ -92,6 +105,12 @@ export default function Clients() {
                 }
             });
 
+            // الاشتراك النشط (لسه مش متجدد وليه تاريخ انتهاء) — أقرب واحد للانتهاء، ده اللي زرار "تجديد" هيشتغل عليه
+            const renewableSales = custSales
+                .filter(s => s.renewal_stage !== 'renewed' && s.expiryDate)
+                .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+            const activeSale = renewableSales[0] || null;
+
             return {
                 ...cust,
                 totalSpent,
@@ -100,10 +119,20 @@ export default function Clients() {
                 productNames,
                 history: custSales.sort((a, b) => new Date(b.date) - new Date(a.date)),
                 lastSale,
-                expiryDate: latestExpiry
+                expiryDate: latestExpiry,
+                activeSale
             };
         });
     }, [customers, sales]);
+
+    // فتح تفاصيل عميل مباشرة لو جاي من البحث السريع (Ctrl+K)
+    useEffect(() => {
+        if (renewalTarget?.openClientId) {
+            const client = clientsList.find(c => String(c.id) === String(renewalTarget.openClientId));
+            if (client) setSelectedClient(client);
+            setRenewalTarget(null);
+        }
+    }, [renewalTarget, clientsList, setRenewalTarget]);
 
     // Sort
     const sortedClients = useMemo(() => {
@@ -168,11 +197,29 @@ export default function Clients() {
         return dupIds;
     }, [sales, customers]);
 
+    // مجموعات العملاء المكررين فعليًا (نفس الإيميل بالظبط في أكتر من سجل عميل) — دي اللي قابلة للدمج
+    const duplicateGroups = useMemo(() => {
+        const byEmail = {};
+        customers.forEach(c => {
+            if (!c.email) return;
+            const key = c.email.toLowerCase().trim();
+            if (!byEmail[key]) byEmail[key] = [];
+            byEmail[key].push(c.id);
+        });
+        return Object.values(byEmail).filter(ids => ids.length > 1);
+    }, [customers]);
+
+    const mergeGroupIdsFor = (clientId) => duplicateGroups.find(group => group.includes(clientId)) || null;
+
     // Filter
     const filteredClients = useMemo(() => {
         let list = sortedClients;
         if (showDuplicatesOnly) {
             list = list.filter(c => duplicateClientIds.has(c.id));
+        }
+        if (showFollowUpDueOnly) {
+            const todayStr = new Date().toISOString().split('T')[0];
+            list = list.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= todayStr);
         }
         if (!searchTerm) return list;
         const term = searchTerm.toLowerCase();
@@ -182,7 +229,7 @@ export default function Clients() {
             (c.email && c.email.toLowerCase().includes(term)) ||
             (c.id && c.id.toLowerCase().includes(term))
         );
-    }, [sortedClients, searchTerm, showDuplicatesOnly, duplicateClientIds]);
+    }, [sortedClients, searchTerm, showDuplicatesOnly, duplicateClientIds, showFollowUpDueOnly]);
 
     const visibleClients = filteredClients.slice(0, visibleCount);
 
@@ -264,6 +311,110 @@ export default function Clients() {
         }
     };
 
+    // ========= Merge Duplicates =========
+    const openMergeModal = (clientId) => {
+        const groupIds = mergeGroupIdsFor(clientId);
+        if (!groupIds) return;
+        const group = clientsList.filter(c => groupIds.includes(c.id));
+        setMergeGroup(group);
+        // افتراضيًا نختار العميل صاحب أكبر عدد أوردرات كأساسي
+        setMergePrimaryId([...group].sort((a, b) => b.ordersCount - a.ordersCount)[0]?.id || '');
+    };
+
+    const confirmMerge = async () => {
+        if (!mergeGroup || !mergePrimaryId) return;
+        const ok = await showConfirm({
+            title: 'دمج العملاء المكررين',
+            message: `هتترحّل كل أوردرات ${mergeGroup.length - 1} عميل تاني على "${mergeGroup.find(c => c.id === mergePrimaryId)?.name}" وهيتحذفوا. الإجراء ده مينفعش يتراجع فيه.`,
+            confirmText: 'دمج',
+            cancelText: 'إلغاء',
+            type: 'danger',
+        });
+        if (!ok) return;
+        setMerging(true);
+        try {
+            const duplicateIds = mergeGroup.map(c => c.id).filter(id => id !== mergePrimaryId);
+            await customersAPI.mergeInto(mergePrimaryId, duplicateIds);
+            setMergeGroup(null);
+            setMergePrimaryId('');
+            await refreshData();
+        } catch (error) {
+            console.error(error);
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ أثناء الدمج', type: 'danger' });
+        }
+        setMerging(false);
+    };
+
+    // ========= Tags / Notes / Follow-up =========
+    const persistClientFields = async (fields) => {
+        if (!selectedClient) return;
+        try {
+            await customersAPI.updateFields(selectedClient.id, fields);
+            setSelectedClient(prev => prev ? { ...prev, ...fields } : prev);
+            refreshData();
+        } catch (error) {
+            console.error(error);
+            showAlert({ title: 'خطأ!', message: 'حدث خطأ أثناء الحفظ', type: 'danger' });
+        }
+    };
+
+    const toggleTag = (tag) => {
+        const current = selectedClient?.tags || [];
+        const next = current.includes(tag) ? current.filter(t => t !== tag) : [...current, tag];
+        persistClientFields({ tags: next });
+    };
+
+    const addCustomTag = () => {
+        const tag = newTagInput.trim();
+        if (!tag) return;
+        const current = selectedClient?.tags || [];
+        if (!current.includes(tag)) persistClientFields({ tags: [...current, tag] });
+        setNewTagInput('');
+    };
+
+    const saveNotes = (notes) => persistClientFields({ notes });
+
+    const saveNextFollowUp = (date) => persistClientFields({ nextFollowUpDate: date || null });
+
+    // تسجيل تواصل جديد في سجل العميل (Timeline)
+    const logContact = (result) => {
+        if (!selectedClient) return;
+        const entry = {
+            date: new Date().toISOString(),
+            channel: selectedClient.contactChannel || 'واتساب',
+            result: result || 'تم التواصل',
+            note: contactNote.trim(),
+        };
+        const history = [entry, ...(selectedClient.contactHistory || [])].slice(0, 100);
+        persistClientFields({ contactHistory: history, lastContactDate: entry.date });
+        setContactNote('');
+    };
+
+    const deleteContactEntry = (index) => {
+        if (!selectedClient) return;
+        const history = (selectedClient.contactHistory || []).filter((_, i) => i !== index);
+        persistClientFields({ contactHistory: history });
+    };
+
+    // فتح واتساب بقالب جاهز للعميل المحدد (متغيرات من آخر أوردر)
+    const sendClientWhatsApp = (template) => {
+        if (!selectedClient) return;
+        const latestSale = selectedClient.history?.[0] || {};
+        const vars = {
+            ...saleVars(latestSale),
+            name: selectedClient.name || selectedClient.email || 'عميلنا العزيز',
+        };
+        const msg = fillTemplate(template.text, vars);
+        window.open(buildWaLink(selectedClient.phone, msg), '_blank');
+    };
+
+    // ========= Message Templates editor =========
+    const persistTemplates = (list) => { setTemplates(list); saveTemplates(list); };
+    const updateTemplate = (id, patch) => persistTemplates(templates.map(t => t.id === id ? { ...t, ...patch } : t));
+    const addTemplate = () => persistTemplates([...templates, { id: 'tpl-' + Date.now(), label: 'قالب جديد', icon: 'fa-comment', text: 'أهلاً {name} 👋\n' }]);
+    const removeTemplate = (id) => persistTemplates(templates.filter(t => t.id !== id));
+    const resetTemplates = () => persistTemplates(JSON.parse(JSON.stringify(DEFAULT_TEMPLATES)));
+
     return (
         <div className="space-y-6 animate-fade-in pb-20 font-sans text-slate-800">
 
@@ -305,6 +456,10 @@ export default function Clients() {
                     <button onClick={() => setShowDuplicatesOnly(!showDuplicatesOnly)}
                         className={`px-4 py-2.5 rounded-xl text-xs md:text-sm font-bold transition-all flex items-center gap-2 border ${showDuplicatesOnly ? 'bg-red-600 text-white border-red-600 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200'}`}>
                         <i className="fa-solid fa-clone"></i> المكرر ({duplicateClientIds.size})
+                    </button>
+                    <button onClick={() => setShowFollowUpDueOnly(!showFollowUpDueOnly)}
+                        className={`px-4 py-2.5 rounded-xl text-xs md:text-sm font-bold transition-all flex items-center gap-2 border ${showFollowUpDueOnly ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-200'}`}>
+                        <i className="fa-solid fa-phone-volume"></i> متابعة مستحقة
                     </button>
                     <select value={sortOption} onChange={e => setSortOption(e.target.value)} className="bg-white border-2 border-slate-200 text-slate-700 text-sm font-bold rounded-xl p-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all">
                         <option value="ordersCount">🔥 الأكثر طلباً</option>
@@ -355,6 +510,8 @@ export default function Clients() {
                             ) : (
                                 visibleClients.map(client => {
                                     const expStatus = getExpiryStatus(client.expiryDate);
+                                    const isFollowUpDue = client.nextFollowUpDate && client.nextFollowUpDate <= new Date().toISOString().split('T')[0];
+                                    const mergeGroupIds = mergeGroupIdsFor(client.id);
                                     return (
                                         <tr key={client.id}
                                             onClick={() => setSelectedClient(client)}
@@ -375,6 +532,18 @@ export default function Clients() {
                                                                 <p className="text-[10px] text-indigo-400 font-mono truncate max-w-[150px]">{client.email}</p>
                                                             )}
                                                         </div>
+                                                        {(client.tags?.length > 0 || isFollowUpDue) && (
+                                                            <div className="flex flex-wrap gap-1 mt-1">
+                                                                {client.tags?.map(tag => (
+                                                                    <span key={tag} className="text-[9px] font-bold bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded border border-purple-100">{tag}</span>
+                                                                ))}
+                                                                {isFollowUpDue && (
+                                                                    <span className="text-[9px] font-bold bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded border border-amber-100">
+                                                                        <i className="fa-solid fa-phone-volume"></i> متابعة مستحقة
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </td>
@@ -422,6 +591,11 @@ export default function Clients() {
                                             {/* Actions */}
                                             <td className="p-4 text-center" onClick={e => e.stopPropagation()}>
                                                 <div className="flex justify-center gap-1">
+                                                    {mergeGroupIds && (
+                                                        <button onClick={() => openMergeModal(client.id)} className="w-8 h-8 flex items-center justify-center rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition" title="دمج مع نسخ مكررة">
+                                                            <i className="fa-solid fa-code-merge text-xs"></i>
+                                                        </button>
+                                                    )}
                                                     <button onClick={() => { setEditingClient(client); }} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition" title="تعديل">
                                                         <i className="fa-solid fa-pen text-xs"></i>
                                                     </button>
@@ -515,6 +689,127 @@ export default function Clients() {
                                 </div>
                             )}
 
+                            {/* Tags + Notes + Follow-up */}
+                            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+                                <div>
+                                    <h4 className="font-bold text-slate-700 mb-2 text-sm flex items-center gap-2">
+                                        <i className="fa-solid fa-tags text-purple-500"></i> التصنيفات
+                                    </h4>
+                                    <div className="flex flex-wrap gap-2">
+                                        {[...new Set([...PRESET_TAGS, ...(selectedClient.tags || [])])].map(tag => {
+                                            const active = (selectedClient.tags || []).includes(tag);
+                                            return (
+                                                <button key={tag} onClick={() => toggleTag(tag)}
+                                                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition ${active ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-slate-500 border-slate-200 hover:border-purple-300'}`}>
+                                                    {tag}
+                                                </button>
+                                            );
+                                        })}
+                                        <div className="flex items-center gap-1">
+                                            <input value={newTagInput} onChange={e => setNewTagInput(e.target.value)}
+                                                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomTag(); } }}
+                                                placeholder="تصنيف جديد..." className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 w-28 outline-none focus:border-purple-300" />
+                                            <button onClick={addCustomTag} className="text-purple-500 hover:text-purple-700 px-1.5"><i className="fa-solid fa-plus text-xs"></i></button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <h4 className="font-bold text-slate-700 mb-2 text-sm flex items-center gap-2">
+                                        <i className="fa-solid fa-sticky-note text-amber-500"></i> ملاحظات
+                                    </h4>
+                                    <textarea defaultValue={selectedClient.notes} onBlur={e => saveNotes(e.target.value)}
+                                        placeholder="أي ملاحظات عن العميل..." key={selectedClient.id}
+                                        className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl p-3 text-sm outline-none focus:border-amber-300 h-20 resize-none" />
+                                </div>
+
+                                {/* رسائل واتساب جاهزة */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <h4 className="font-bold text-slate-700 text-sm flex items-center gap-2">
+                                            <i className="fa-brands fa-whatsapp text-green-500"></i> رسائل واتساب جاهزة
+                                        </h4>
+                                        <button onClick={() => setShowTemplateEditor(true)} className="text-[11px] font-bold text-indigo-500 hover:text-indigo-700 flex items-center gap-1">
+                                            <i className="fa-solid fa-pen-to-square text-[10px]"></i> تعديل القوالب
+                                        </button>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {templates.map(t => (
+                                            <button key={t.id} onClick={() => sendClientWhatsApp(t)}
+                                                className="bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 text-xs font-bold px-3 py-2 rounded-lg transition flex items-center gap-1.5"
+                                                title={selectedClient.phone ? 'إرسال على واتساب' : 'العميل بدون رقم — هيفتح شاشة الاختيار'}>
+                                                <i className={`fa-solid ${t.icon}`}></i> {t.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {!selectedClient.phone && (
+                                        <p className="text-[10px] text-amber-500 font-bold mt-1.5"><i className="fa-solid fa-triangle-exclamation ml-1"></i> العميل بدون رقم هاتف</p>
+                                    )}
+                                </div>
+
+                                {/* تسجيل تواصل + متابعة تالية */}
+                                <div>
+                                    <h4 className="font-bold text-slate-700 mb-2 text-sm flex items-center gap-2">
+                                        <i className="fa-solid fa-phone-volume text-emerald-500"></i> تسجيل تواصل
+                                    </h4>
+                                    <input value={contactNote} onChange={e => setContactNote(e.target.value)}
+                                        placeholder="ملاحظة عن المكالمة (اختياري)..."
+                                        className="w-full bg-slate-50 border-2 border-slate-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-emerald-300 mb-2" />
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {CONTACT_RESULTS.map(r => (
+                                            <button key={r} onClick={() => logContact(r)}
+                                                className="bg-white text-slate-600 border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-[11px] font-bold px-3 py-1.5 rounded-lg transition">
+                                                {r}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <div className="flex items-center gap-2 mt-3 flex-wrap">
+                                        {selectedClient.lastContactDate && (
+                                            <span className="text-[11px] text-slate-400">آخر تواصل: {new Date(selectedClient.lastContactDate).toLocaleDateString('en-GB')}</span>
+                                        )}
+                                        <div className="flex items-center gap-2 mr-auto">
+                                            <label className="text-[11px] font-bold text-slate-400">متابعة تالية في</label>
+                                            <input type="date" defaultValue={selectedClient.nextFollowUpDate || ''} onBlur={e => saveNextFollowUp(e.target.value)}
+                                                key={selectedClient.id + '-fu'}
+                                                className="bg-slate-50 border-2 border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none focus:border-emerald-300 dir-ltr" />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Timeline سجل التواصل */}
+                                {selectedClient.contactHistory?.length > 0 && (
+                                    <div>
+                                        <h4 className="font-bold text-slate-700 mb-2 text-sm flex items-center gap-2">
+                                            <i className="fa-solid fa-timeline text-blue-500"></i> سجل التواصل ({selectedClient.contactHistory.length})
+                                        </h4>
+                                        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                                            {selectedClient.contactHistory.map((entry, i) => {
+                                                const resultCls = entry.result === 'رفض' ? 'bg-red-50 text-red-600 border-red-200'
+                                                    : entry.result === 'مهتم' ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                                                    : entry.result === 'لم يرد' ? 'bg-amber-50 text-amber-600 border-amber-200'
+                                                    : 'bg-slate-50 text-slate-600 border-slate-200';
+                                                return (
+                                                    <div key={i} className="bg-white border border-slate-100 rounded-xl p-2.5 flex items-start gap-2.5 group/entry">
+                                                        <div className="w-2 h-2 rounded-full bg-blue-400 mt-1.5 flex-shrink-0"></div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2 flex-wrap">
+                                                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-md border ${resultCls}`}>{entry.result}</span>
+                                                                <span className="text-[10px] text-slate-400 font-bold">{entry.channel}</span>
+                                                                <span className="text-[10px] text-slate-400">{new Date(entry.date).toLocaleDateString('en-GB')} • {new Date(entry.date).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</span>
+                                                            </div>
+                                                            {entry.note && <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">{entry.note}</p>}
+                                                        </div>
+                                                        <button onClick={() => deleteContactEntry(i)} className="opacity-0 group-hover/entry:opacity-100 text-slate-300 hover:text-red-500 transition p-1" title="حذف">
+                                                            <i className="fa-solid fa-xmark text-xs"></i>
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
                             {/* Orders History Table */}
                             <div>
                                 <h4 className="font-bold text-slate-700 mb-3 text-sm flex items-center gap-2">
@@ -570,6 +865,15 @@ export default function Clients() {
 
                             {/* Actions */}
                             <div className="flex gap-3 pt-2 flex-wrap">
+                                {selectedClient.activeSale && (
+                                    <button onClick={() => {
+                                        setRenewalTarget({ openRenewSaleId: selectedClient.activeSale.id });
+                                        setActiveTab('renewals');
+                                        setSelectedClient(null);
+                                    }} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition flex items-center gap-2">
+                                        <i className="fa-solid fa-rotate"></i> تجديد الاشتراك
+                                    </button>
+                                )}
                                 <button onClick={() => setEditingClient(selectedClient)} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition flex items-center gap-2">
                                     <i className="fa-solid fa-pen"></i> تعديل بيانات العميل
                                 </button>
@@ -582,6 +886,38 @@ export default function Clients() {
                                     </button>
                                 )}
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ============ MERGE DUPLICATES MODAL ============ */}
+            {mergeGroup && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4 animate-fade-in" onClick={() => !merging && setMergeGroup(null)}>
+                    <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="p-6 bg-gradient-to-r from-red-600 to-orange-600 text-white flex justify-between items-center">
+                            <h3 className="text-lg font-bold flex items-center gap-2"><i className="fa-solid fa-code-merge"></i> دمج عملاء مكررين</h3>
+                            <button onClick={() => !merging && setMergeGroup(null)} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition"><i className="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <p className="text-sm text-slate-500">اختار العميل الأساسي اللي هتترحّل عليه كل الأوردرات، والباقي هيتحذف.</p>
+                            <div className="space-y-2">
+                                {mergeGroup.map(c => (
+                                    <label key={c.id} className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition ${mergePrimaryId === c.id ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                                        <input type="radio" name="mergePrimary" checked={mergePrimaryId === c.id} onChange={() => setMergePrimaryId(c.id)} className="w-4 h-4 text-indigo-600" />
+                                        <div className="flex-1 min-w-0">
+                                            <p className="font-bold text-sm text-slate-800 truncate">{c.name} <span className="text-[10px] text-slate-400 font-mono">({c.id})</span></p>
+                                            <p className="text-[11px] text-slate-400">{c.phone || '-'} • {c.ordersCount} أوردر • {c.totalSpent.toLocaleString()} ج.م</p>
+                                        </div>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
+                            <button onClick={() => setMergeGroup(null)} disabled={merging} className="px-5 py-2.5 rounded-xl font-bold text-slate-600 bg-slate-50 border-2 border-slate-200 hover:bg-slate-100 transition">إلغاء</button>
+                            <button onClick={confirmMerge} disabled={merging || !mergePrimaryId} className="px-6 py-2.5 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 transition flex items-center gap-2 disabled:opacity-60">
+                                {merging ? <><i className="fa-solid fa-spinner fa-spin"></i> جاري الدمج...</> : <><i className="fa-solid fa-code-merge"></i> تأكيد الدمج</>}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -633,6 +969,38 @@ export default function Clients() {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* ========= Message Templates Editor ========= */}
+            {showTemplateEditor && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[75] p-4 animate-fade-in" onClick={() => setShowTemplateEditor(false)}>
+                    <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="p-5 bg-gradient-to-r from-green-600 to-emerald-600 text-white flex justify-between items-center">
+                            <h3 className="text-lg font-bold flex items-center gap-2"><i className="fa-brands fa-whatsapp"></i> قوالب رسائل واتساب</h3>
+                            <button onClick={() => setShowTemplateEditor(false)} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition"><i className="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+                        <div className="p-5 overflow-y-auto space-y-4">
+                            <p className="text-[11px] text-slate-500 bg-slate-50 rounded-lg p-2.5 border border-slate-100">
+                                المتغيرات المتاحة: <code className="text-indigo-600 font-bold">{'{name}'}</code> <code className="text-indigo-600 font-bold">{'{product}'}</code> <code className="text-indigo-600 font-bold">{'{expiry}'}</code> <code className="text-indigo-600 font-bold">{'{days}'}</code> <code className="text-indigo-600 font-bold">{'{price}'}</code> <code className="text-indigo-600 font-bold">{'{remaining}'}</code>
+                            </p>
+                            {templates.map(t => (
+                                <div key={t.id} className="bg-slate-50 rounded-2xl border border-slate-200 p-3 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                        <input value={t.label} onChange={e => updateTemplate(t.id, { label: e.target.value })}
+                                            className="flex-1 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none focus:border-green-300" placeholder="اسم القالب" />
+                                        <button onClick={() => removeTemplate(t.id)} className="text-slate-300 hover:text-red-500 transition p-1.5" title="حذف القالب"><i className="fa-solid fa-trash text-xs"></i></button>
+                                    </div>
+                                    <textarea value={t.text} onChange={e => updateTemplate(t.id, { text: e.target.value })}
+                                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs outline-none focus:border-green-300 h-24 resize-none leading-relaxed" placeholder="نص الرسالة..." />
+                                </div>
+                            ))}
+                        </div>
+                        <div className="p-4 border-t border-slate-100 flex gap-2 bg-slate-50/80">
+                            <button onClick={addTemplate} className="flex-1 bg-green-600 text-white py-2.5 rounded-xl font-bold hover:bg-green-700 transition text-sm flex items-center justify-center gap-2"><i className="fa-solid fa-plus"></i> قالب جديد</button>
+                            <button onClick={resetTemplates} className="px-4 py-2.5 rounded-xl font-bold text-slate-500 bg-white border border-slate-200 hover:bg-slate-100 transition text-sm">استعادة الافتراضي</button>
+                        </div>
                     </div>
                 </div>
             )}

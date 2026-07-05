@@ -104,6 +104,7 @@ export default function Sidebar ({ isOpen, onClose }) {
     const copyField = (text, id) => { navigator.clipboard.writeText(text); setCopiedField(id); setTimeout(() => setCopiedField(null), 1500); };
 
     const allTabs = [
+        { id: 'today',      label: 'شغل النهاردة', icon: 'fa-clipboard-check', perm: 'renewals' },
         { id: 'dashboard',  label: 'الرئيسية',   icon: 'fa-chart-pie' },
         { id: 'sales',      label: 'المبيعات',    icon: 'fa-cart-shopping' },
         { id: 'products',   label: 'المنتجات',    icon: 'fa-boxes-stacked' },
@@ -143,7 +144,7 @@ export default function Sidebar ({ isOpen, onClose }) {
                 </div>
 
                 <nav className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-1">
-                    {allTabs.filter(t => hasPermission(t.id)).map(item => (
+                    {allTabs.filter(t => hasPermission(t.perm || t.id)).map(item => (
                         <button
                             key={item.id}
                             onClick={() => { setActiveTab(item.id); onClose(); }}

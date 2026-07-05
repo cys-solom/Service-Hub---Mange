@@ -7,6 +7,7 @@ import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
 import telegram from './services/telegram';
 import { recurringExpensesAPI } from './services/api';
+import { useCriticalNotifier, requestNotificationPermission, getNotificationPermission } from './services/pwa';
 
 // Lazy load heavy components — يحمّلها بس لما المستخدم يحتاجها
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -25,6 +26,7 @@ const BotSettings = lazy(() => import('./components/BotSettings'));
 const Employees = lazy(() => import('./components/Employees'));
 const AuditLog = lazy(() => import('./components/AuditLog'));
 const Attendance = lazy(() => import('./components/Attendance'));
+const DailyWorklist = lazy(() => import('./components/DailyWorklist'));
 
 // Lazy load new overlay components
 const GlobalSearch = lazy(() => import('./components/GlobalSearch'));
@@ -67,7 +69,7 @@ function useQuickNotifCount() {
 
 const MainLayout = () => {
   const { user, hasPermission } = useAuth();
-  const { activeTab, setActiveTab } = useData();
+  const { activeTab, setActiveTab, sales, accounts, sections, customers } = useData();
   const checkPerm = (perm) => hasPermission ? hasPermission(perm) : true;
 
   const [isSidebarOpen, setSidebarOpen] = useState(false);
@@ -75,6 +77,9 @@ const MainLayout = () => {
   const [showNotifs, setShowNotifs] = useState(false);
 
   const notifCount = useQuickNotifCount();
+
+  // إشعارات النظام للتنبيهات الحرجة (اشتراك منتهي / مخزون فارغ / متابعة مستحقة)
+  useCriticalNotifier({ sales, accounts, sections, customers }, setActiveTab);
 
   // Ctrl+K keyboard shortcut for search
   useEffect(() => {
@@ -147,7 +152,7 @@ const MainLayout = () => {
             {/* Right: Notifications + User */}
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setShowNotifs(true)}
+                onClick={() => { setShowNotifs(true); if (getNotificationPermission() === 'default') requestNotificationPermission(); }}
                 className="relative p-2.5 bg-slate-50 text-slate-500 rounded-xl border border-slate-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-all"
               >
                 <i className="fa-solid fa-bell text-lg"></i>
@@ -168,6 +173,7 @@ const MainLayout = () => {
 
           {/* عرض المكونات مع Lazy Loading */}
           <Suspense fallback={<PageLoader />}>
+            {activeTab === 'today' && checkPerm('renewals') && <DailyWorklist />}
             {activeTab === 'dashboard' && checkPerm('dashboard') && <Dashboard />}
             {activeTab === 'sales' && checkPerm('sales') && <Sales />}
             {activeTab === 'products' && checkPerm('products') && <Products />}

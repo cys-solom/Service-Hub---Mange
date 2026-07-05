@@ -2,10 +2,15 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { salesAPI, accountsAPI, walletsAPI, customersAPI } from '../services/api';
+import { salesAPI, accountsAPI, walletsAPI, customersAPI, saleTemplatesAPI } from '../services/api';
 import telegram from '../services/telegram';
 import * as XLSX from 'xlsx';
 import { useConfirm } from './ConfirmDialog';
+import ReceiptModal from './ReceiptModal';
+import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend } from 'chart.js';
+import { Line } from 'react-chartjs-2';
+
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
 
 export default function Sales() {
     const { user, hasPermission } = useAuth();
@@ -22,6 +27,7 @@ export default function Sales() {
     const [showSaleModal, setShowSaleModal] = useState(false);
     const [editingProduct, setEditingProduct] = useState(null);
     const [editingSale, setEditingSale] = useState(null);
+    const [receiptSale, setReceiptSale] = useState(null);
     
     // Account assignment details modal
     const [assignedAccountDetails, setAssignedAccountDetails] = useState(null);
@@ -36,6 +42,7 @@ export default function Sales() {
     const [selectedCustomerId, setSelectedCustomerId] = useState('');
     const [contactChannel, setContactChannel] = useState('واتساب');
     const [customerSearch, setCustomerSearch] = useState('');
+    const [lastCustomerSale, setLastCustomerSale] = useState(null);
     const formRef = useRef(null);
 
     // Sale type state (personal / workspace)
@@ -45,7 +52,18 @@ export default function Sales() {
     const [searchTerm, setSearchTerm] = useState('');
     const [productFilters, setProductFilters] = useState([]); // array of selected product names
     const [statusFilter, setStatusFilter] = useState('all');
+    const [dateFrom, setDateFrom] = useState('');
+    const [dateTo, setDateTo] = useState('');
+    const [moderatorFilter, setModeratorFilter] = useState('');
+    const [channelFilter, setChannelFilter] = useState('');
     const [visibleCount, setVisibleCount] = useState(15);
+
+    // Bulk selection
+    const [selectedSaleIds, setSelectedSaleIds] = useState(new Set());
+
+    // Quick sale templates
+    const [saleTemplates, setSaleTemplates] = useState([]);
+    const [showTemplateSaveModal, setShowTemplateSaveModal] = useState(false);
 
     // ========= Sync from context =========
     useEffect(() => {
@@ -53,6 +71,51 @@ export default function Sales() {
         setWallets(ctxWallets);
         setCustomers(ctxCustomers);
     }, [ctxSales, ctxWallets, ctxCustomers]);
+
+    // ========= Sale Templates =========
+    const loadSaleTemplates = () => {
+        saleTemplatesAPI.getAll().then(setSaleTemplates).catch(err => console.error('[Sales] loadSaleTemplates', err));
+    };
+    useEffect(() => { loadSaleTemplates(); }, []);
+
+    const applyTemplate = (tpl) => {
+        if (!formRef.current) return;
+        const productSelect = formRef.current.querySelector('[name="productName"]');
+        const discountInput = formRef.current.querySelector('[name="discount"]');
+        const warrantyFeeInput = formRef.current.querySelector('[name="warrantyFee"]');
+        const walletSelect = formRef.current.querySelector('[name="walletId"]');
+        if (productSelect) productSelect.value = tpl.productName || '';
+        if (discountInput) discountInput.value = tpl.discount || 0;
+        if (warrantyFeeInput) warrantyFeeInput.value = tpl.warrantyFee || 0;
+        if (walletSelect) walletSelect.value = tpl.walletId || '';
+    };
+
+    const saveCurrentAsTemplate = async (name) => {
+        if (!formRef.current || !name.trim()) return;
+        const productName = formRef.current.querySelector('[name="productName"]')?.value || '';
+        const discount = Number(formRef.current.querySelector('[name="discount"]')?.value || 0);
+        const warrantyFee = Number(formRef.current.querySelector('[name="warrantyFee"]')?.value || 0);
+        const walletId = formRef.current.querySelector('[name="walletId"]')?.value || '';
+        if (!productName) { showAlert({ title: 'خطأ', message: 'اختر منتج الأول', type: 'warning' }); return; }
+        try {
+            await saleTemplatesAPI.create({ name: name.trim(), productName, discount, warrantyFee, walletId, createdBy: user?.username });
+            loadSaleTemplates();
+            setShowTemplateSaveModal(false);
+        } catch (e) {
+            showAlert({ title: 'خطأ', message: e.message, type: 'danger' });
+        }
+    };
+
+    const deleteTemplate = async (id) => {
+        const ok = await showConfirm({ title: 'حذف القالب', message: 'متأكد إنك عايز تحذف القالب ده؟' });
+        if (!ok) return;
+        try {
+            await saleTemplatesAPI.remove(id);
+            loadSaleTemplates();
+        } catch (e) {
+            showAlert({ title: 'خطأ', message: e.message, type: 'danger' });
+        }
+    };
 
     // Reset customer form when modal opens
     useEffect(() => {
@@ -78,6 +141,7 @@ export default function Sales() {
                 setWorkspaceEmail('');
             }
             setCustomerSearch('');
+            setLastCustomerSale(null);
         }
     }, [showSaleModal, editingSale]);
 
@@ -94,6 +158,33 @@ export default function Sales() {
             if (emailInput) emailInput.value = customer.email || '';
             setContactChannel(customer.contactChannel || 'واتساب');
         }
+
+        // آخر عملية للعميل ده — لعرض اقتراح "استخدام نفس التفاصيل"
+        const customerSales = sales
+            .filter(s => String(s.customerId) === String(custId))
+            .sort((a, b) => new Date(b.date) - new Date(a.date));
+        setLastCustomerSale(customerSales[0] || null);
+    };
+
+    // تعبئة المنتج/الخصم/الضمان/المحفظة من آخر عملية لنفس العميل
+    const applyLastSaleDetails = () => {
+        if (!lastCustomerSale || !formRef.current) return;
+        const productSelect = formRef.current.querySelector('[name="productName"]');
+        const discountInput = formRef.current.querySelector('[name="discount"]');
+        const warrantyFeeInput = formRef.current.querySelector('[name="warrantyFee"]');
+        const extraWarrantyDaysInput = formRef.current.querySelector('[name="extraWarrantyDays"]');
+        const walletSelect = formRef.current.querySelector('[name="walletId"]');
+
+        if (productSelect) productSelect.value = lastCustomerSale.productName || '';
+        if (discountInput) discountInput.value = lastCustomerSale.discount || 0;
+        if (warrantyFeeInput) warrantyFeeInput.value = lastCustomerSale.warrantyFee || 0;
+        if (extraWarrantyDaysInput) {
+            const product = products.find(p => p.name === lastCustomerSale.productName);
+            const defaultWarranty = product?.default_warranty || 0;
+            extraWarrantyDaysInput.value = Math.max(0, (lastCustomerSale.warrantyDays || 0) - defaultWarranty);
+        }
+        if (walletSelect) walletSelect.value = lastCustomerSale.walletId || '';
+        if (lastCustomerSale.contactChannel) setContactChannel(lastCustomerSale.contactChannel);
     };
 
     // Get filtered customers for search
@@ -137,7 +228,15 @@ export default function Sales() {
         return new Set(Object.keys(emailCounts).filter(k => emailCounts[k] > 1));
     }, [sales]);
 
+    // قائمة المودريتورز المتاحة للفلترة (مشتقة من المبيعات نفسها)
+    const moderatorList = useMemo(() => {
+        return [...new Set(sales.map(s => s.moderator).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar'));
+    }, [sales]);
+
     const filteredSales = useMemo(() => {
+        const fromTime = dateFrom ? new Date(dateFrom).getTime() : null;
+        const toTime = dateTo ? new Date(dateTo + 'T23:59:59').getTime() : null;
+
         return sales.filter(s => {
             const matchProduct = productFilters.length === 0 || productFilters.includes(s.productName);
             const matchStatus = statusFilter === 'all'
@@ -156,9 +255,70 @@ export default function Sales() {
                 (s.customerPhone && s.customerPhone.includes(term)) ||
                 (s.productName && s.productName.toLowerCase().includes(term)) ||
                 (s.notes && s.notes.toLowerCase().includes(term));
-            return matchProduct && matchStatus && matchSearch;
+            const saleTime = new Date(s.date).getTime();
+            const matchDate = (!fromTime || saleTime >= fromTime) && (!toTime || saleTime <= toTime);
+            const matchModerator = !moderatorFilter || s.moderator === moderatorFilter;
+            const matchChannel = !channelFilter || s.contactChannel === channelFilter;
+            return matchProduct && matchStatus && matchSearch && matchDate && matchModerator && matchChannel;
         }).sort((a, b) => new Date(b.date) - new Date(a.date));
-    }, [sales, productFilters, statusFilter, searchTerm, duplicateEmails]);
+    }, [sales, productFilters, statusFilter, searchTerm, duplicateEmails, dateFrom, dateTo, moderatorFilter, channelFilter]);
+
+    // بيانات رسم الإيراد عبر الوقت (حسب الفلاتر الحالية)
+    const revenueChartData = useMemo(() => {
+        const byDate = {};
+        filteredSales.forEach(s => {
+            const d = new Date(s.date).toISOString().split('T')[0];
+            byDate[d] = (byDate[d] || 0) + (Number(s.finalPrice) || 0);
+        });
+        const sortedDates = Object.keys(byDate).sort();
+        return {
+            labels: sortedDates.map(d => new Date(d).toLocaleDateString('ar-EG', { day: '2-digit', month: 'short' })),
+            datasets: [{
+                label: 'الإيراد',
+                data: sortedDates.map(d => byDate[d]),
+                borderColor: '#4f46e5',
+                backgroundColor: 'rgba(79, 70, 229, 0.5)',
+                tension: 0.3,
+            }],
+        };
+    }, [filteredSales]);
+
+    // ========= Bulk Selection =========
+    const toggleSelectSale = (id) => {
+        setSelectedSaleIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+    };
+
+    const allFilteredSelected = filteredSales.length > 0 && filteredSales.every(s => selectedSaleIds.has(s.id));
+
+    const toggleSelectAll = () => {
+        setSelectedSaleIds(allFilteredSelected ? new Set() : new Set(filteredSales.map(s => s.id)));
+    };
+
+    const bulkMarkPaid = async () => {
+        const targets = sales.filter(s => selectedSaleIds.has(s.id) && !s.isPaid);
+        for (const s of targets) {
+            await salesAPI.togglePaid(s.id, true, s.finalPrice, s);
+        }
+        setSelectedSaleIds(new Set());
+        await refreshData();
+    };
+
+    const bulkActivate = async () => {
+        const targets = sales.filter(s => selectedSaleIds.has(s.id) && !s.isActivated);
+        for (const s of targets) {
+            await salesAPI.toggleActivated(s.id, true, s);
+        }
+        setSelectedSaleIds(new Set());
+        await refreshData();
+    };
+
+    const bulkExport = () => {
+        exportExcel(sales.filter(s => selectedSaleIds.has(s.id)));
+    };
 
     const stats = useMemo(() => {
         const totalRevenue = filteredSales.reduce((sum, s) => sum + (Number(s.finalPrice) || 0), 0);
@@ -573,8 +733,8 @@ export default function Sales() {
     };
 
     // ========= Export =========
-    const exportExcel = () => {
-        const ws = XLSX.utils.json_to_sheet(filteredSales.map(s => ({
+    const exportExcel = (list = filteredSales) => {
+        const ws = XLSX.utils.json_to_sheet(list.map(s => ({
             "المنتج": s.productName, "اسم العميل": s.customerName, "الهاتف": s.customerPhone, "الإيميل": s.customerEmail,
             "السعر": s.originalPrice, "الخصم": s.discount, "الإجمالي": s.finalPrice,
             "حالة الدفع": s.isPaid ? 'مدفوع' : 'غير مدفوع', "المتبقي": s.remainingAmount,
@@ -628,7 +788,7 @@ export default function Sales() {
                             <input type="text" className="w-full bg-white border-2 border-slate-200 text-slate-900 text-sm font-semibold rounded-xl pr-10 p-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all placeholder-slate-400" placeholder="بحث بالاسم أو الرقم أو الإيميل أو المنتج..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
                         </div>
                         <div className="flex gap-3 w-full md:w-auto">
-                            <button onClick={exportExcel} className="bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 font-bold rounded-xl text-sm px-4 py-3 transition-all" title="تصدير Excel"><i className="fa-solid fa-file-excel"></i></button>
+                            <button onClick={() => exportExcel()} className="bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 font-bold rounded-xl text-sm px-4 py-3 transition-all" title="تصدير Excel"><i className="fa-solid fa-file-excel"></i></button>
                             <button onClick={openAddSale} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm px-8 py-3 shadow-lg shadow-indigo-200 transition-all flex items-center gap-2">
                                 <i className="fa-solid fa-plus"></i> بيع جديد
                             </button>
@@ -667,6 +827,81 @@ export default function Sales() {
                         )}
                     </div>
 
+                    {/* Advanced Filters: date range, moderator, channel */}
+                    <div className="flex flex-wrap gap-3 items-center bg-white p-3 rounded-2xl border border-slate-200 shadow-sm">
+                        <div className="flex items-center gap-2">
+                            <label className="text-[11px] font-bold text-slate-400">من</label>
+                            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="bg-slate-50 border-2 border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none focus:border-indigo-400 dir-ltr" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <label className="text-[11px] font-bold text-slate-400">إلى</label>
+                            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="bg-slate-50 border-2 border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none focus:border-indigo-400 dir-ltr" />
+                        </div>
+                        <select value={moderatorFilter} onChange={e => setModeratorFilter(e.target.value)}
+                            className={`appearance-none bg-slate-50 border-2 rounded-lg px-3 py-1.5 text-xs font-bold cursor-pointer outline-none transition-all ${moderatorFilter ? 'border-indigo-400 text-indigo-700 bg-indigo-50' : 'border-slate-200 text-slate-600'}`}>
+                            <option value="">كل المودريتورز</option>
+                            {moderatorList.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                        <select value={channelFilter} onChange={e => setChannelFilter(e.target.value)}
+                            className={`appearance-none bg-slate-50 border-2 rounded-lg px-3 py-1.5 text-xs font-bold cursor-pointer outline-none transition-all ${channelFilter ? 'border-indigo-400 text-indigo-700 bg-indigo-50' : 'border-slate-200 text-slate-600'}`}>
+                            <option value="">كل القنوات</option>
+                            <option value="واتساب">واتساب</option>
+                            <option value="ماسنجر">ماسنجر</option>
+                            <option value="تليجرام">تليجرام</option>
+                        </select>
+                        {(dateFrom || dateTo || moderatorFilter || channelFilter) && (
+                            <button onClick={() => { setDateFrom(''); setDateTo(''); setModeratorFilter(''); setChannelFilter(''); }}
+                                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition flex items-center gap-1">
+                                <i className="fa-solid fa-xmark"></i> مسح الكل
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Revenue Over Time Chart */}
+                    {filteredSales.length > 0 && (
+                        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                            <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                <i className="fa-solid fa-chart-line text-indigo-500"></i> أداء الإيراد عبر الوقت (حسب الفلاتر الحالية)
+                            </h4>
+                            <div style={{ height: '220px' }}>
+                                <Line data={revenueChartData} options={{
+                                    responsive: true, maintainAspectRatio: false,
+                                    scales: { y: { grid: { borderDash: [2, 4], color: '#f1f5f9' } }, x: { grid: { display: false } } },
+                                    plugins: { legend: { display: false } },
+                                }} />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Bulk Actions Bar */}
+                    {selectedSaleIds.size > 0 && (
+                        <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg flex flex-wrap items-center justify-between gap-3 sticky top-2 z-20">
+                            <span className="text-sm font-bold px-2">{selectedSaleIds.size} بيعة محددة</span>
+                            <div className="flex flex-wrap gap-2">
+                                <button onClick={bulkMarkPaid} className="bg-white/15 hover:bg-white/25 text-white text-xs font-bold px-3 py-2 rounded-lg transition flex items-center gap-1.5">
+                                    <i className="fa-solid fa-check"></i> تعليم كمدفوع
+                                </button>
+                                <button onClick={bulkActivate} className="bg-white/15 hover:bg-white/25 text-white text-xs font-bold px-3 py-2 rounded-lg transition flex items-center gap-1.5">
+                                    <i className="fa-solid fa-bolt"></i> تفعيل
+                                </button>
+                                <button onClick={bulkExport} className="bg-white/15 hover:bg-white/25 text-white text-xs font-bold px-3 py-2 rounded-lg transition flex items-center gap-1.5">
+                                    <i className="fa-solid fa-file-excel"></i> تصدير المحدد
+                                </button>
+                                <button onClick={() => setSelectedSaleIds(new Set())} className="bg-white/10 hover:bg-white/20 text-white text-xs font-bold px-3 py-2 rounded-lg transition">
+                                    إلغاء التحديد
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Select All */}
+                    {filteredSales.length > 0 && (
+                        <label className="flex items-center gap-2 px-1 cursor-pointer w-fit">
+                            <input type="checkbox" checked={allFilteredSelected} onChange={toggleSelectAll} className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300" />
+                            <span className="text-xs font-bold text-slate-500">تحديد الكل ({filteredSales.length})</span>
+                        </label>
+                    )}
+
                     {/* Sales List */}
                     <div className="space-y-3">
                         {filteredSales.length === 0 ? (
@@ -685,8 +920,11 @@ export default function Sales() {
                                     <div className={`h-1 ${sale.isPaid && sale.isActivated ? 'bg-gradient-to-r from-emerald-400 to-teal-400' : sale.isPaid ? 'bg-gradient-to-r from-emerald-400 to-blue-400' : 'bg-gradient-to-r from-red-400 to-orange-400'}`}></div>
                                     
                                     <div className="p-4">
-                                        {/* Row 1: Avatar + Name + Price */}
+                                        {/* Row 1: Checkbox + Avatar + Name + Price */}
                                         <div className="flex items-center gap-3 mb-3">
+                                            <input type="checkbox" checked={selectedSaleIds.has(sale.id)} onChange={() => toggleSelectSale(sale.id)}
+                                                onClick={e => e.stopPropagation()}
+                                                className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 flex-shrink-0" />
                                             <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-sm flex-shrink-0 shadow-sm ${sale.isPaid ? 'bg-gradient-to-br from-emerald-500 to-teal-600' : 'bg-gradient-to-br from-red-500 to-orange-600'}`}>
                                                 {(sale.customerName || sale.customerEmail || 'ع').charAt(0).toUpperCase()}
                                             </div>
@@ -752,6 +990,7 @@ export default function Sales() {
                                             <div className="flex items-center gap-1">
                                                 <button onClick={() => togglePaid(sale.id)} className={`w-7 h-7 rounded-lg flex items-center justify-center transition text-xs ${sale.isPaid ? 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200' : 'bg-orange-100 text-orange-600 hover:bg-orange-200'}`} title={sale.isPaid ? 'إلغاء الدفع' : 'تأكيد الدفع'}><i className={`fa-solid ${sale.isPaid ? 'fa-check-double' : 'fa-coins'}`}></i></button>
                                                 <button onClick={() => toggleActivated(sale.id)} className={`w-7 h-7 rounded-lg flex items-center justify-center transition text-xs ${sale.isActivated ? 'bg-blue-100 text-blue-600 hover:bg-blue-200' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`} title={sale.isActivated ? 'إلغاء التفعيل' : 'تفعيل'}><i className={`fa-solid ${sale.isActivated ? 'fa-bolt' : 'fa-power-off'}`}></i></button>
+                                                <button onClick={() => setReceiptSale(sale)} className="w-7 h-7 rounded-lg flex items-center justify-center bg-slate-100 text-slate-500 hover:bg-indigo-100 hover:text-indigo-600 transition text-xs" title="إيصال"><i className="fa-solid fa-receipt"></i></button>
                                                 <button onClick={() => openEditSale(sale)} className="w-7 h-7 rounded-lg flex items-center justify-center bg-slate-100 text-slate-500 hover:bg-blue-100 hover:text-blue-600 transition text-xs" title="تعديل"><i className="fa-solid fa-pen-to-square"></i></button>
                                                 <button onClick={() => deleteSale(sale.id)} className="w-7 h-7 rounded-lg flex items-center justify-center bg-slate-100 text-slate-500 hover:bg-red-100 hover:text-red-600 transition text-xs" title="حذف"><i className="fa-solid fa-trash-can"></i></button>
                                             </div>
@@ -786,6 +1025,32 @@ export default function Sales() {
                         </div>
                         <div className="p-8 overflow-y-auto space-y-6">
                             <form id="saleForm" ref={formRef} onSubmit={handleSaveSale} className="space-y-6" key={editingSale?.id || 'new'}>
+                                {/* قوالب بيع سريعة */}
+                                <div className="bg-violet-50 border border-violet-200 rounded-2xl p-4 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <div className="text-xs font-black text-violet-700 uppercase tracking-widest flex items-center gap-1.5"><i className="fa-solid fa-bolt"></i> قوالب سريعة</div>
+                                        <button type="button" onClick={() => setShowTemplateSaveModal(true)} className="text-[11px] font-bold text-violet-600 hover:text-violet-800 transition flex items-center gap-1">
+                                            <i className="fa-solid fa-floppy-disk"></i> حفظ كقالب
+                                        </button>
+                                    </div>
+                                    {saleTemplates.length === 0 ? (
+                                        <p className="text-[11px] text-violet-400">مفيش قوالب لسه — اختار منتج وخصم ومحفظة وادوس "حفظ كقالب"</p>
+                                    ) : (
+                                        <div className="flex flex-wrap gap-2">
+                                            {saleTemplates.map(tpl => (
+                                                <div key={tpl.id} className="bg-white border border-violet-200 rounded-lg flex items-center overflow-hidden">
+                                                    <button type="button" onClick={() => applyTemplate(tpl)} className="px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-100 transition">
+                                                        {tpl.name}
+                                                    </button>
+                                                    <button type="button" onClick={() => deleteTemplate(tpl.id)} className="px-2 py-1.5 text-violet-300 hover:text-red-500 hover:bg-red-50 transition border-r border-violet-100">
+                                                        <i className="fa-solid fa-xmark text-[10px]"></i>
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
                                 {/* اختيار المنتج */}
                                 <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
                                     <div className="text-xs font-black text-indigo-600 uppercase tracking-widest mb-2"><i className="fa-solid fa-tag ml-1"></i> المنتج</div>
@@ -824,7 +1089,7 @@ export default function Sales() {
                                     
                                     {/* Toggle: عميل جديد / عميل سابق */}
                                     <div className="flex gap-2 bg-slate-100 p-1.5 rounded-xl">
-                                        <button type="button" onClick={() => { setCustomerType('new'); setSelectedCustomerId(''); }} className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${customerType === 'new' ? 'bg-white text-indigo-700 shadow-md' : 'text-slate-500 hover:bg-white/50'}`}>
+                                        <button type="button" onClick={() => { setCustomerType('new'); setSelectedCustomerId(''); setLastCustomerSale(null); }} className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${customerType === 'new' ? 'bg-white text-indigo-700 shadow-md' : 'text-slate-500 hover:bg-white/50'}`}>
                                             <i className="fa-solid fa-user-plus"></i> عميل جديد
                                         </button>
                                         <button type="button" onClick={() => setCustomerType('existing')} className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${customerType === 'existing' ? 'bg-white text-indigo-700 shadow-md' : 'text-slate-500 hover:bg-white/50'}`}>
@@ -868,6 +1133,19 @@ export default function Sales() {
                                                     ))}
                                                 </div>
                                             )}
+                                        </div>
+                                    )}
+
+                                    {/* اقتراح تعبئة نفس تفاصيل آخر عملية للعميل */}
+                                    {customerType === 'existing' && selectedCustomerId && lastCustomerSale && (
+                                        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
+                                            <div className="text-xs text-indigo-700">
+                                                <span className="font-bold">آخر عملية:</span> {lastCustomerSale.productName} — {Number(lastCustomerSale.finalPrice).toLocaleString()} ج.م بتاريخ {new Date(lastCustomerSale.date).toLocaleDateString('en-GB')}
+                                            </div>
+                                            <button type="button" onClick={applyLastSaleDetails}
+                                                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3 py-2 rounded-lg transition flex items-center gap-1.5 whitespace-nowrap">
+                                                <i className="fa-solid fa-clone"></i> استخدام نفس التفاصيل
+                                            </button>
                                         </div>
                                     )}
 
@@ -1043,6 +1321,23 @@ export default function Sales() {
                 </div>
             , document.body)}
 
+            {/* ============ SAVE TEMPLATE MODAL ============ */}
+            {showTemplateSaveModal && createPortal(
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 animate-fade-in" onClick={() => setShowTemplateSaveModal(false)}>
+                    <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><i className="fa-solid fa-bolt text-violet-500"></i> حفظ كقالب سريع</h3>
+                        <p className="text-xs text-slate-400">هيتم حفظ المنتج والخصم ورسوم الضمان والمحفظة المختارين دلوقتي في الفورم.</p>
+                        <form onSubmit={e => { e.preventDefault(); saveCurrentAsTemplate(new FormData(e.target).get('templateName') || ''); }} className="space-y-3">
+                            <input name="templateName" autoFocus placeholder="اسم القالب (مثال: باقة شهرية مخصومة)" className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:border-violet-400" required />
+                            <div className="flex gap-2 justify-end">
+                                <button type="button" onClick={() => setShowTemplateSaveModal(false)} className="px-4 py-2 rounded-xl font-bold text-slate-600 bg-slate-50 border-2 border-slate-200 hover:bg-slate-100 transition text-sm">إلغاء</button>
+                                <button type="submit" className="px-5 py-2 rounded-xl font-bold text-white bg-violet-600 hover:bg-violet-700 transition text-sm">حفظ</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            , document.body)}
+
             {/* ============ ASSIGNED ACCOUNT DETAILS MODAL ============ */}
             {assignedAccountDetails && createPortal(
                 <div className="animate-fade-in" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(4px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
@@ -1188,6 +1483,11 @@ export default function Sales() {
                     </div>
                 </div>
             , document.body)}
+
+            {receiptSale && createPortal(
+                <ReceiptModal sale={receiptSale} onClose={() => setReceiptSale(null)} />,
+                document.body
+            )}
 
             <style>{`
                 .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
